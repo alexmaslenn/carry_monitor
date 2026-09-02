@@ -1,0 +1,183 @@
+{
+  "uid": "carry-robot",
+  "title": "Carry Robot",
+  "tags": ["carry", "robot"],
+  "timezone": "utc",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+        "definition": "label_values(acc_position, instance)",
+        "query": { "query": "label_values(acc_position, instance)", "refId": "A" },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "symbol",
+        "label": "Symbol",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+        "definition": "label_values(acc_position{instance=\"$instance\"}, symbol)",
+        "query": { "query": "label_values(acc_position{instance=\"$instance\"}, symbol)", "refId": "A" },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Position integrity",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "Position drift: engine vs venue",
+      "description": "acc_position{type=remote} minus {type=local}. 'local' is the engine's own fill-derived tally; 'remote' is what the venue reports. They are independent paths, so a persistent gap is the ONLY evidence available that fills have been missed.\n\nThis is not hypothetical: a dropped position feed let a strategy re-issue the same order 25 times because its own position read 0.00 while 119 orders filled behind it. Non-zero here for more than a scrape or two warrants stopping the book.",
+      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.000001 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{symbol}}",
+          "expr": "acc_position{instance=\"$instance\", symbol=~\"$symbol\", type=\"remote\"} - on(instance, account, symbol) acc_position{instance=\"$instance\", symbol=~\"$symbol\", type=\"local\"}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "Position by symbol",
+      "description": "Repeated across every symbol the account touches, from label_values - so a new instrument appears without a dashboard edit.",
+      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{symbol}} ({{type}})",
+          "expr": "acc_position{instance=\"$instance\", symbol=~\"$symbol\"}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 10,
+      "title": "Liveness",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Connector message rate",
+      "description": "Zero on a connector that should be live means the venue link is dead even though the process is up. Every incident worth alerting on this session was silent in exactly this way.",
+      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{connector}}",
+          "expr": "sum(rate(connector_messages{instance=\"$instance\"}[$__rate_interval])) by (connector)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 12,
+      "title": "Clock offset vs venue (ms)",
+      "description": "binance_timeshift. recvWindow is spent on one-way latency PLUS this offset, so drift here is the leading indicator for -1021 'Timestamp outside recvWindow' - which presents as a strategy that silently never fills, not as a clock problem.\n\nThis metric already existed and was never watched; a 217ms drift from an unsynced clock broke every order until it was found by hand.",
+      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{instance}}",
+          "expr": "binance_timeshift{instance=\"$instance\"}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 13,
+      "title": "Order delay",
+      "description": "order_delay by type. A rising tail here alongside rejections usually means the place-staleness guard is firing rather than the venue refusing.",
+      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50 {{type}}",
+          "expr": "histogram_quantile(0.5, sum(rate(order_delay_bucket{instance=\"$instance\"}[$__rate_interval])) by (le, type))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95 {{type}}",
+          "expr": "histogram_quantile(0.95, sum(rate(order_delay_bucket{instance=\"$instance\"}[$__rate_interval])) by (le, type))"
+        }
+      ]
+    }
+  ]
+}

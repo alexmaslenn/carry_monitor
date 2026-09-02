@@ -1,0 +1,15 @@
+# Scrapes the Cell trading process. The engine ships a Prometheus endpoint
+# (Tram.Kit.Metrics.PrometheusMetricsCollector) - it just has to be enabled in
+# the Cell appsettings with a Metrics section carrying Host and Port.
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: 'carry_robot'
+    metrics_path: '/metrics'
+    static_configs:
+      # host.docker.internal works when Cell runs on the docker host.
+      # Replace with the trading box address once it is deployed.
+      - targets: ['host.docker.internal:9702']
+        labels:
+          setup: 'hlbn'

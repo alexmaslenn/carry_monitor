@@ -1,0 +1,25 @@
+# Provisioned datasources. Fixed UIDs so the dashboard JSON can reference them
+# without being edited after import.
+apiVersion: 1
+
+datasources:
+  - name: CarryTimescale
+    uid: carry-timescale
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: ${TS_DB_HOST}:${TS_DB_PORT}
+    user: ${TS_DB_USER}
+    database: ${TS_DB_NAME}
+    isDefault: true
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: ${TS_DB_PASSWORD}
+
+  - name: CarryPrometheus
+    uid: carry-prometheus
+    type: prometheus
+    access: proxy
+    url: http://carry_prometheus:9090
