@@ -1,4 +1,5 @@
-.env
-__pycache__/
 *.pyc
+.env
+.scrape_test.txt
 .venv/
+__pycache__/

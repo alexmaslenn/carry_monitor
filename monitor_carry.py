@@ -8,15 +8,21 @@ costs new constants, six duplicated extraction blocks, nine new JSON keys, and a
 edit to every Grafana panel naming one of those keys.
 
 Here the instrument is a row dimension (see sql/001_carry.sql) and the instrument
-list comes from config, so adding one is a single env var and Grafana repeats its
-panels off a template variable.
+list is DISCOVERED at runtime - from what the robot declares in its metrics and
+from what is actually held on either venue. Trading a new pair needs no change
+here, and the Grafana variables are queries over what has been written, so the
+dashboards follow automatically.
 
 This process is READ-ONLY. It never places an order. The Binance key it uses
 should have withdrawals and trading disabled - reading is all it needs.
 
 Env (see .env.example):
   CARRY_SETUP          book name, default 'hlbn'
-  CARRY_INSTRUMENTS    JSON list, e.g. ["DOGE","ETH"]
+  CARRY_INSTRUMENTS    OPTIONAL seed list. Instruments are discovered; this only
+                       forces extra ones to be collected even when flat.
+  CARRY_PROMETHEUS_URL Where to read the robot's declared instruments from
+  CARRY_ROBOT_METRICS_URL  Fallback: scrape the robot directly
+  CARRY_DISCOVERY_MIN_USD  Dust floor for held-position discovery, default 1
   CARRY_TARGETS        JSON map instrument -> signed USD perp target, e.g.
                        {"DOGE": -20}. Negative = short perp / long spot.
   HL_ADDRESS           Hyperliquid MAIN account address (public, read-only)
@@ -41,8 +47,31 @@ if dotenv.find_dotenv():
     dotenv.load_dotenv()
 
 SETUP = os.getenv("CARRY_SETUP", "hlbn")
-INSTRUMENTS: list[str] = json.loads(os.getenv("CARRY_INSTRUMENTS", '["DOGE"]'))
+
+# A SEED, not the source of truth. Instruments are discovered at runtime (see
+# discover_instruments) so that trading a new pair does not require editing this.
+# Anything listed here is always collected even when flat, which is useful for a
+# pair you are about to trade and want history for.
+SEED_INSTRUMENTS: list[str] = json.loads(os.getenv("CARRY_INSTRUMENTS", "[]"))
+
 TARGETS: dict[str, float] = json.loads(os.getenv("CARRY_TARGETS", "{}"))
+
+# Where to learn what the robot INTENDS to trade. Either works; Prometheus is
+# preferred because it survives a robot restart, whereas scraping the robot
+# directly goes blind exactly when the robot is down.
+PROM_URL = os.getenv("CARRY_PROMETHEUS_URL", "")          # e.g. http://carry_prometheus:9090
+ROBOT_METRICS_URL = os.getenv("CARRY_ROBOT_METRICS_URL", "")  # e.g. http://robot:9702/metrics
+
+# Below this notional an asset is dust, not a position. Without it the residue
+# left by a closed leg - a fraction of a coin the venue minimum cannot trade
+# away - would register as a live instrument forever.
+DISCOVERY_MIN_USD = float(os.getenv("CARRY_DISCOVERY_MIN_USD", "1"))
+
+# Collateral, not positions. These sit in the same balance response as real
+# holdings and would otherwise be discovered as enormous instruments.
+QUOTE_ASSETS = {
+    "USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD", "USDE", "USDH", "USDT0",
+}
 
 HL_ADDRESS = os.getenv("HL_ADDRESS", "")
 HL_INFO = "https://api.hyperliquid.xyz/info"
@@ -219,6 +248,118 @@ def binance_spot_mid(instrument: str) -> float:
         return 0.0
 
 
+# ------------------------------------------------------------------ discovery
+
+
+def declared_instruments() -> set[str]:
+    """What the ROBOT says it is trading, from its own metric labels.
+
+    CarryHedge tags carry_delta_usd with the asset for every configured market,
+    so adding a market to the strategy makes it appear here - before it has
+    filled anything. That early visibility is the point: a market that is
+    configured but never fills is a failure worth seeing, and it is invisible if
+    discovery only looks at held positions.
+    """
+    assets: set[str] = set()
+
+    if PROM_URL:
+        try:
+            r = requests.get(
+                f"{PROM_URL}/api/v1/query",
+                params={"query": "carry_delta_usd"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            for series in r.json().get("data", {}).get("result", []):
+                asset = series.get("metric", {}).get("asset")
+                if asset:
+                    assets.add(asset)
+            return assets
+        except Exception as error:
+            log(f"Prometheus discovery failed, falling back: {error}")
+
+    if ROBOT_METRICS_URL:
+        try:
+            r = requests.get(ROBOT_METRICS_URL, timeout=10)
+            r.raise_for_status()
+            for line in r.text.splitlines():
+                if line.startswith("carry_delta_usd{"):
+                    inner = line[line.index("{") + 1 : line.index("}")]
+                    for part in inner.split(","):
+                        k, _, v = part.partition("=")
+                        if k.strip() == "asset":
+                            assets.add(v.strip().strip('"'))
+        except Exception as error:
+            log(f"Robot metrics discovery failed: {error}")
+
+    return assets
+
+
+def held_instruments(
+    hl_positions: dict[str, float],
+    bn_holdings: dict[str, float],
+    hl_ctx: dict[str, dict[str, float]],
+) -> set[str]:
+    """What is actually HELD on either venue, above the dust threshold.
+
+    This is the more important half. Declared instruments tell you what the robot
+    means to do; held instruments tell you what you are actually exposed to -
+    including anything the robot does not know about. A position left by a
+    reconfigured strategy, or opened by hand, is exactly the position most likely
+    to go unwatched, and it would never appear in any config.
+    """
+    assets: set[str] = set()
+
+    for coin, qty in hl_positions.items():
+        if coin in QUOTE_ASSETS or not qty:
+            continue
+        mark = hl_ctx.get(coin, {}).get("mark", 0.0)
+        # No mark means we cannot size it - include it rather than drop it.
+        # Over-monitoring is cheap; an unmonitored position is not.
+        if not mark or abs(qty * mark) >= DISCOVERY_MIN_USD:
+            assets.add(coin)
+
+    for asset, qty in bn_holdings.items():
+        if asset in QUOTE_ASSETS or not qty:
+            continue
+        mark = hl_ctx.get(asset, {}).get("mark", 0.0)
+        if not mark:
+            mark = binance_spot_mid(asset)
+        if not mark or abs(qty * mark) >= DISCOVERY_MIN_USD:
+            assets.add(asset)
+
+    return assets
+
+
+def discover_instruments(
+    hl_positions: dict[str, float],
+    bn_holdings: dict[str, float],
+    hl_ctx: dict[str, dict[str, float]],
+) -> list[str]:
+    """Union of seeded, declared and held. Never a config edit to add a pair."""
+    seeded = set(SEED_INSTRUMENTS)
+    declared = declared_instruments()
+    held = held_instruments(hl_positions, bn_holdings, hl_ctx)
+
+    combined = sorted(seeded | declared | held)
+
+    # Worth surfacing: an instrument that is held but NOT declared means the book
+    # holds something the robot is not managing. That is a risk finding, not a
+    # logging detail.
+    unmanaged = held - declared - seeded
+    if unmanaged:
+        log(
+            f"HELD BUT NOT DECLARED BY THE ROBOT: {sorted(unmanaged)} - "
+            "position exists that the strategy is not configured to manage."
+        )
+
+    log(
+        f"Instruments: {combined} "
+        f"(seeded={sorted(seeded)}, declared={sorted(declared)}, held={sorted(held)})"
+    )
+    return combined
+
+
 # -------------------------------------------------------------------- writing
 
 
@@ -246,16 +387,22 @@ def main() -> int:
         return 1
 
     t = minute_time()
-    log(f"Carry monitor '{SETUP}' for {INSTRUMENTS}. Pulling data.")
+    log(f"Carry monitor '{SETUP}'. Pulling data.")
 
     hl_positions, hl_account = hl_state()
     hl_ctx = hl_marks_and_funding()
     bn_holdings, bn_account = binance_state()
 
+    # Discovered every scrape, not read from config. Trading a new pair makes it
+    # appear here on the next run, and the Grafana variables are already queries
+    # over what has been written - so the dashboards pick it up with no edit
+    # anywhere in the chain.
+    instruments = discover_instruments(hl_positions, bn_holdings, hl_ctx)
+
     leg_rows: list[tuple] = []
     delta_rows: list[tuple] = []
 
-    for instrument in INSTRUMENTS:
+    for instrument in instruments:
         ctx = hl_ctx.get(instrument, {})
         hl_mark = ctx.get("mark", 0.0)
         hl_funding = ctx.get("funding_rate_ann", 0.0)
