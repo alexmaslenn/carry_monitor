@@ -97,6 +97,7 @@ Fill in:
 - `GRAFANA_HOSTNAME` — the name from step 3
 - `ACME_EMAIL`, `CF_API_TOKEN` — for the certificate
 - `GF_ADMIN_PASSWORD`
+- `ROBOT_SERVER_IP` — private IP of the trading box (see step 6)
 - `HL_ADDRESS` — the Hyperliquid **main account address**. Public; no key needed.
 - `BINANCE_API_KEY` / `_SECRET` — **read-only**. This process never trades, so
   disable withdrawals *and* trading on the key. Do not reuse the trading key.
@@ -109,10 +110,29 @@ them in `.env`.
 
 ## 6. Point Prometheus at the robot
 
-Edit `prometheus/prometheus.yml` and replace `host.docker.internal:9702` with the
-trading box's private IP.
+**Do not put an address in `prometheus/prometheus.yml`.** The target there is the
+name `carry_tokyo`, and the name is resolved by an `extra_hosts` entry on the
+prometheus service — fed from `ROBOT_SERVER_IP` in `.env`. Set that and nothing
+else:
 
-**This will not work until the robot's metrics endpoint is reachable.** The Cell
+```
+ROBOT_SERVER_IP=10.x.x.x
+```
+
+The name is what ends up in the `instance` label on every stored series, so it
+has to stay stable. An address there means replacing the trading box splits the
+history in two — old series under the old address, new ones under the new, no
+panel joining across them. This is how aegis_monitor resolves `okx_colo` and
+`jlp_okx_colo`, for the same reason.
+
+Each target also carries `setup` and `host` labels. `setup` matches the `setup`
+column in `carry_leg_time`, so both dashboards filter on one identifier; `host`
+names the machine, kept separate because a setup can move between boxes. To add
+a second book later, add a `targets:` entry with its own labels and a matching
+`extra_hosts` line — no dashboard edit, since the variables read from
+`label_values`.
+
+**None of this works until the robot's metrics endpoint is reachable.** The Cell
 config uses `"Host": "localhost"`, which only accepts local connections. On the
 trading box set:
 

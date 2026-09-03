@@ -60,6 +60,11 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=${PROM_RETENTION:-90d}"
+    # Resolves the symbolic target names in prometheus.yml, so the scrape config
+    # never contains an address and `instance` stays a stable label across box
+    # moves. Same mechanism aegis_monitor uses for okx_colo / jlp_okx_colo.
+    extra_hosts:
+      carry_tokyo: "${ROBOT_SERVER_IP}"
     # Loopback only - reach it over an ssh tunnel. Prometheus has no auth.
     ports:
       - "127.0.0.1:9091:9090"

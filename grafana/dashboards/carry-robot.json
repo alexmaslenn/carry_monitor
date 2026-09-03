@@ -10,23 +10,35 @@
   "templating": {
     "list": [
       {
-        "name": "instance",
-        "label": "Instance",
+        "name": "setup",
+        "label": "Setup",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
-        "definition": "label_values(acc_position, instance)",
-        "query": { "query": "label_values(acc_position, instance)", "refId": "A" },
+        "definition": "label_values(acc_position, setup)",
+        "query": { "query": "label_values(acc_position, setup)", "refId": "A" },
         "refresh": 1,
         "includeAll": false,
         "multi": false
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+        "definition": "label_values(acc_position{setup=\"$setup\"}, host)",
+        "query": { "query": "label_values(acc_position{setup=\"$setup\"}, host)", "refId": "A" },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
       },
       {
         "name": "symbol",
         "label": "Symbol",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
-        "definition": "label_values(acc_position{instance=\"$instance\"}, symbol)",
-        "query": { "query": "label_values(acc_position{instance=\"$instance\"}, symbol)", "refId": "A" },
+        "definition": "label_values(acc_position{setup=\"$setup\", host=~\"$host\"}, symbol)",
+        "query": { "query": "label_values(acc_position{setup=\"$setup\", host=~\"$host\"}, symbol)", "refId": "A" },
         "refresh": 1,
         "includeAll": true,
         "multi": true,
@@ -67,7 +79,7 @@
         {
           "refId": "A",
           "legendFormat": "{{symbol}}",
-          "expr": "acc_position{instance=\"$instance\", symbol=~\"$symbol\", type=\"remote\"} - on(instance, account, symbol) acc_position{instance=\"$instance\", symbol=~\"$symbol\", type=\"local\"}"
+          "expr": "acc_position{setup=\"$setup\", host=~\"$host\", symbol=~\"$symbol\", type=\"remote\"} - on(instance, account, symbol) acc_position{setup=\"$setup\", host=~\"$host\", symbol=~\"$symbol\", type=\"local\"}"
         }
       ]
     },
@@ -88,7 +100,7 @@
         {
           "refId": "A",
           "legendFormat": "{{symbol}} ({{type}})",
-          "expr": "acc_position{instance=\"$instance\", symbol=~\"$symbol\"}"
+          "expr": "acc_position{setup=\"$setup\", host=~\"$host\", symbol=~\"$symbol\"}"
         }
       ]
     },
@@ -118,7 +130,7 @@
         {
           "refId": "A",
           "legendFormat": "{{connector}}",
-          "expr": "sum(rate(connector_messages{instance=\"$instance\"}[$__rate_interval])) by (connector)"
+          "expr": "sum(rate(connector_messages{setup=\"$setup\", host=~\"$host\"}[$__rate_interval])) by (connector)"
         }
       ]
     },
@@ -147,8 +159,8 @@
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{instance}}",
-          "expr": "binance_timeshift{instance=\"$instance\"}"
+          "legendFormat": "{{host}}",
+          "expr": "binance_timeshift{setup=\"$setup\", host=~\"$host\"}"
         }
       ]
     },
@@ -170,12 +182,12 @@
         {
           "refId": "A",
           "legendFormat": "p50 {{type}}",
-          "expr": "histogram_quantile(0.5, sum(rate(order_delay_bucket{instance=\"$instance\"}[$__rate_interval])) by (le, type))"
+          "expr": "histogram_quantile(0.5, sum(rate(order_delay_bucket{setup=\"$setup\", host=~\"$host\"}[$__rate_interval])) by (le, type))"
         },
         {
           "refId": "B",
           "legendFormat": "p95 {{type}}",
-          "expr": "histogram_quantile(0.95, sum(rate(order_delay_bucket{instance=\"$instance\"}[$__rate_interval])) by (le, type))"
+          "expr": "histogram_quantile(0.95, sum(rate(order_delay_bucket{setup=\"$setup\", host=~\"$host\"}[$__rate_interval])) by (le, type))"
         }
       ]
     }
