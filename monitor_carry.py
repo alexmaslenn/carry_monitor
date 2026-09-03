@@ -99,6 +99,22 @@ def log(message: str) -> None:
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}", flush=True)
 
 
+# Which upstream sources failed this scrape.
+#
+# This exists because every fetch used to catch its exception and return an empty
+# result, making "Prometheus is unreachable" indistinguishable from "the robot
+# trades nothing". Discovery would then collect nothing, the instrument's panels
+# would go flat, and nothing would say why - monitoring that stops monitoring
+# exactly when something is wrong. A source that failed has told us NOTHING, and
+# must never be allowed to shrink the instrument list.
+SOURCES_FAILED: set[str] = set()
+
+
+def source_failed(name: str, error: object) -> None:
+    SOURCES_FAILED.add(name)
+    log(f"SOURCE FAILED [{name}]: {error}")
+
+
 def minute_time() -> str:
     return time.strftime("%Y-%m-%d %H:%M:00", time.gmtime())
 
@@ -113,7 +129,7 @@ def hl_info(body: dict[str, Any]) -> Any:
         r.raise_for_status()
         return r.json()
     except Exception as error:
-        log(f"HL info request failed ({body.get('type')}): {error}")
+        source_failed(f"hl:{body.get('type')}", error)
         return None
 
 
@@ -198,7 +214,7 @@ def binance_signed(path: str, params: dict[str, Any] | None = None) -> Any:
         r.raise_for_status()
         return r.json()
     except Exception as error:
-        log(f"Binance request failed ({path}): {error}")
+        source_failed(f"binance:{path}", error)
         return None
 
 
@@ -244,7 +260,7 @@ def binance_spot_mid(instrument: str) -> float:
         d = r.json()
         return (float(d["bidPrice"]) + float(d["askPrice"])) / 2
     except Exception as error:
-        log(f"Binance spot price failed ({instrument}): {error}")
+        source_failed(f"binance_spot:{instrument}", error)
         return 0.0
 
 
@@ -276,7 +292,7 @@ def declared_instruments() -> set[str]:
                     assets.add(asset)
             return assets
         except Exception as error:
-            log(f"Prometheus discovery failed, falling back: {error}")
+            source_failed("prometheus", error)
 
     if ROBOT_METRICS_URL:
         try:
@@ -290,7 +306,7 @@ def declared_instruments() -> set[str]:
                         if k.strip() == "asset":
                             assets.add(v.strip().strip('"'))
         except Exception as error:
-            log(f"Robot metrics discovery failed: {error}")
+            source_failed("robot_metrics", error)
 
     return assets
 
@@ -331,21 +347,73 @@ def held_instruments(
     return assets
 
 
+def registry_active() -> set[str]:
+    """Instruments this setup has seen before and not retired.
+
+    Membership is STICKY on purpose. Discovery reads live sources, and live
+    sources fail; without a persisted set, one unreachable endpoint silently
+    drops an instrument from collection at exactly the moment something is wrong.
+    """
+    try:
+        with psycopg2.connect(CONNECTION) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT instrument FROM carry_instrument WHERE setup = %s AND active;",
+                (SETUP,),
+            )
+            return {r[0] for r in cur.fetchall()}
+    except (Exception, psycopg2.Error) as error:
+        source_failed("registry", error)
+        return set()
+
+
+def registry_upsert(seen: set[str], active_now: set[str]) -> None:
+    """Record what was seen, and when each instrument last held a position."""
+    if not seen:
+        return
+    try:
+        with psycopg2.connect(CONNECTION) as conn:
+            cur = conn.cursor()
+            for instrument in sorted(seen):
+                is_active = instrument in active_now
+                cur.execute(
+                    "INSERT INTO carry_instrument (setup, instrument, last_active) "
+                    "VALUES (%s, %s, CASE WHEN %s THEN NOW() ELSE NULL END) "
+                    "ON CONFLICT (setup, instrument) DO UPDATE SET "
+                    "  last_seen = NOW(), "
+                    "  active = TRUE, "
+                    "  last_active = CASE WHEN %s THEN NOW() "
+                    "                     ELSE carry_instrument.last_active END;",
+                    (SETUP, instrument, is_active, is_active),
+                )
+            conn.commit()
+    except (Exception, psycopg2.Error) as error:
+        source_failed("registry_write", error)
+
+
 def discover_instruments(
     hl_positions: dict[str, float],
     bn_holdings: dict[str, float],
     hl_ctx: dict[str, dict[str, float]],
 ) -> list[str]:
-    """Union of seeded, declared and held. Never a config edit to add a pair."""
+    """Union of seeded, declared, held and previously-registered.
+
+    The registry term is what makes this survive a broken export. If Prometheus
+    is down, declared comes back empty - not because the robot stopped trading
+    but because we could not ask. Unioning with the registry keeps the instrument
+    collected regardless, and SOURCES_FAILED records why the live answer was thin.
+    """
     seeded = set(SEED_INSTRUMENTS)
     declared = declared_instruments()
     held = held_instruments(hl_positions, bn_holdings, hl_ctx)
+    remembered = registry_active()
 
-    combined = sorted(seeded | declared | held)
+    combined_set = seeded | declared | held | remembered
+    combined = sorted(combined_set)
 
-    # Worth surfacing: an instrument that is held but NOT declared means the book
-    # holds something the robot is not managing. That is a risk finding, not a
-    # logging detail.
+    # Held but not declared: the book holds something the robot is not managing.
+    # A risk finding, not a logging detail - a position left by a reconfigured
+    # strategy or opened by hand is the one most likely to go unwatched.
     unmanaged = held - declared - seeded
     if unmanaged:
         log(
@@ -353,9 +421,22 @@ def discover_instruments(
             "position exists that the strategy is not configured to manage."
         )
 
+    # Collected only because the registry remembers it. Fine when a pair is
+    # genuinely flat; a warning when it coincides with a failed source, because
+    # then its current state is simply unknown.
+    only_remembered = remembered - declared - held - seeded
+    if only_remembered and SOURCES_FAILED:
+        log(
+            f"COLLECTING FROM REGISTRY MEMORY ONLY: {sorted(only_remembered)} while "
+            f"sources failed {sorted(SOURCES_FAILED)} - state of these is unverified."
+        )
+
+    registry_upsert(combined_set, held)
+
     log(
-        f"Instruments: {combined} "
-        f"(seeded={sorted(seeded)}, declared={sorted(declared)}, held={sorted(held)})"
+        f"Instruments: {combined} (seeded={sorted(seeded)}, "
+        f"declared={sorted(declared)}, held={sorted(held)}, "
+        f"registry={sorted(remembered)})"
     )
     return combined
 
@@ -470,6 +551,39 @@ def main() -> int:
             (t, SETUP, "binance", json.dumps(bn_account)),
         ],
     )
+
+    # Heartbeat, written unconditionally - including when everything upstream
+    # failed and there was nothing else to write. Without it a monitor that has
+    # stopped running is indistinguishable from a book with nothing happening:
+    # no new rows either way. Alert on max(time) falling behind, and on
+    # sources_failed being non-empty.
+    write_rows(
+        "carry_heartbeat",
+        "time, setup, instruments, sources_failed, data",
+        [
+            (
+                t,
+                SETUP,
+                len(instruments),
+                ",".join(sorted(SOURCES_FAILED)),
+                json.dumps(
+                    {
+                        "instruments": instruments,
+                        "leg_rows": len(leg_rows),
+                        "delta_rows": len(delta_rows),
+                        "sources_failed": sorted(SOURCES_FAILED),
+                    }
+                ),
+            )
+        ],
+    )
+
+    if SOURCES_FAILED:
+        log(
+            f"Finished DEGRADED. {len(leg_rows)} leg rows, {len(delta_rows)} delta "
+            f"rows. Failed sources: {sorted(SOURCES_FAILED)}"
+        )
+        return 2
 
     log(f"Finished. {len(leg_rows)} leg rows, {len(delta_rows)} delta rows.")
     return 0
