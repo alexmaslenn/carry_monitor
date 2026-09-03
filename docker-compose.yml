@@ -1,11 +1,12 @@
 # Self-contained monitoring stack for the carry book.
 #
-# Deliberately SEPARATE from the aegis_monitor stack: its own Grafana, its own
-# Prometheus, its own database. Nothing here touches the production monitoring
-# instance.
+# Deliberately SEPARATE from the aegis_monitor stack - its own Grafana, its own
+# Prometheus, its own database - so nothing here touches the production
+# monitoring instance. The shape follows aegis_monitor's, because that one works:
+# Traefik in front with Let's Encrypt over a DNS challenge, and Grafana keeping
+# its state in Postgres rather than a container volume.
 #
-# To read from the existing TimescaleDB instead of the bundled one, point
-# TS_DB_HOST at it in .env and comment out the timescaledb service below.
+# Wants ~6 GB, so t3.large. See DEPLOY.md.
 
 networks:
   carry_net:
@@ -13,17 +14,12 @@ networks:
 volumes:
   carry_ts_data:
   carry_prom_data:
-  carry_grafana_data:
 
 services:
-  # Bundled database, OPT-IN. On a 4 GB box (t3.medium) running this alongside
-  # Prometheus and Grafana is tight; point TS_DB_HOST at an existing TimescaleDB
-  # instead and leave this off. Start it with:  docker compose --profile bundled-db up -d
   carry_timescale:
     image: timescale/timescaledb:latest-pg16
     container_name: carry_timescale
     restart: unless-stopped
-    profiles: ["bundled-db"]
     networks: [carry_net]
     environment:
       POSTGRES_DB: ${TS_DB_NAME}
@@ -32,9 +28,25 @@ services:
     command: postgres -c shared_preload_libraries=timescaledb
     volumes:
       - carry_ts_data:/var/lib/postgresql/data
-      - ./sql:/docker-entrypoint-initdb.d:ro
+      # Mounted as INDIVIDUAL files - never as ./sql:/docker-entrypoint-initdb.d.
+      # The timescaledb image ships its own 000_install_timescaledb.sh in that
+      # directory; mounting a directory over it shadows those scripts, so the
+      # extension is never created and 001 dies with
+      #   ERROR: function by_range(unknown) does not exist
+      # which aborts init and leaves the container stopped. The 1xx prefixes keep
+      # ours running after the image's own, on FIRST start only.
+      - ./sql/000_grafana_db.sql:/docker-entrypoint-initdb.d/100_grafana_db.sql:ro
+      - ./sql/001_carry.sql:/docker-entrypoint-initdb.d/101_carry.sql:ro
+      - ./sql/002_registry.sql:/docker-entrypoint-initdb.d/102_registry.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TS_DB_USER} -d ${TS_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Loopback only. Nothing off-box needs the database, and an exposed Postgres
+    # is how monitoring hosts get owned.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
 
   carry_prometheus:
     image: prom/prometheus:latest
@@ -44,30 +56,102 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - carry_prom_data:/prometheus
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROM_RETENTION:-90d}"
+    # Loopback only - reach it over an ssh tunnel. Prometheus has no auth.
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
 
   carry_grafana:
     image: grafana/grafana:11.4.0
     container_name: carry_grafana
     restart: unless-stopped
     networks: [carry_net]
-    depends_on: [carry_prometheus]
+    depends_on:
+      carry_timescale:
+        condition: service_healthy
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD}
-      TS_DB_HOST: ${TS_DB_HOST}
-      TS_DB_PORT: ${TS_DB_PORT}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_HOSTNAME}
+      # State in Postgres, not the container filesystem - the same choice
+      # aegis_monitor makes. Dashboards, users, annotations and alert rules then
+      # survive a rebuild and can be moved between hosts with pg_dump, which is
+      # exactly how Grafana is migrated between monitoring1 and monitoring2.
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: carry_timescale:5432
+      GF_DATABASE_NAME: grafana
+      GF_DATABASE_USER: ${TS_DB_USER}
+      GF_DATABASE_PASSWORD: ${TS_DB_PASSWORD}
+      GF_DATABASE_SSL_MODE: disable
+      # Consumed by the provisioned datasource.
+      TS_DB_HOST: carry_timescale
+      TS_DB_PORT: "5432"
       TS_DB_NAME: ${TS_DB_NAME}
       TS_DB_USER: ${TS_DB_USER}
       TS_DB_PASSWORD: ${TS_DB_PASSWORD}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - carry_grafana_data:/var/lib/grafana
+    # No published port: Traefik reaches it over the docker network, so Grafana
+    # is never directly exposed.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=carry_monitor_carry_net"
+      - "traefik.http.services.carrygrafana.loadbalancer.server.port=3000"
+      - "traefik.http.routers.carrygrafana.rule=Host(`${GRAFANA_HOSTNAME}`)"
+      - "traefik.http.routers.carrygrafana.entrypoints=websecure"
+      - "traefik.http.routers.carrygrafana.tls=true"
+      - "traefik.http.routers.carrygrafana.tls.certresolver=carryresolver"
+      - "traefik.http.routers.carrygrafana.service=carrygrafana"
+      # Plain HTTP exists only to redirect. This dashboard shows positions and
+      # P&L and should never be served unencrypted.
+      - "traefik.http.routers.carrygrafana-http.rule=Host(`${GRAFANA_HOSTNAME}`)"
+      - "traefik.http.routers.carrygrafana-http.entrypoints=web"
+      - "traefik.http.routers.carrygrafana-http.middlewares=carry-to-https"
+      - "traefik.http.middlewares.carry-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.carry-to-https.redirectscheme.permanent=true"
+
+  carry_traefik:
+    image: traefik:latest
+    container_name: carry_traefik
+    restart: unless-stopped
+    networks: [carry_net]
+    command:
+      - "--log.level=WARN"
+      - "--accesslog=true"
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entryPoints.ping.address=:8082"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      # Nothing is routed unless it opts in with a label.
+      - "--providers.docker.exposedByDefault=false"
+      - "--certificatesResolvers.carryresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesResolvers.carryresolver.acme.storage=/letsencrypt/acme.json"
+      # DNS challenge, as aegis_monitor uses. It does not require port 80 to be
+      # reachable from the internet, so the security group can stay closed to
+      # everything except your own address.
+      - "--certificatesResolvers.carryresolver.acme.dnsChallenge.provider=cloudflare"
+    environment:
+      - CLOUDFLARE_DNS_API_TOKEN=${CF_API_TOKEN}
+    volumes:
+      # Read-only: Traefik only needs to watch for container labels. The docker
+      # socket is root on the host, so never mount it writable.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
     ports:
-      - "3001:3000"
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping", "--spider", "-q"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   carry_monitor:
     build: .
@@ -75,4 +159,11 @@ services:
     container_name: carry_monitor
     restart: unless-stopped
     networks: [carry_net]
+    depends_on:
+      carry_timescale:
+        condition: service_healthy
     env_file: .env
+    environment:
+      TS_DB_HOST: carry_timescale
+      TS_DB_PORT: "5432"
+      CARRY_PROMETHEUS_URL: http://carry_prometheus:9090

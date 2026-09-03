@@ -3,3 +3,7 @@
 .scrape_test.txt
 .venv/
 __pycache__/
+
+# Traefik ACME state: acme.json holds the certificate private key.
+letsencrypt/*
+!letsencrypt/.gitkeep
