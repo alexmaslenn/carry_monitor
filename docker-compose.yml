@@ -16,10 +16,14 @@ volumes:
   carry_grafana_data:
 
 services:
+  # Bundled database, OPT-IN. On a 4 GB box (t3.medium) running this alongside
+  # Prometheus and Grafana is tight; point TS_DB_HOST at an existing TimescaleDB
+  # instead and leave this off. Start it with:  docker compose --profile bundled-db up -d
   carry_timescale:
     image: timescale/timescaledb:latest-pg16
     container_name: carry_timescale
     restart: unless-stopped
+    profiles: ["bundled-db"]
     networks: [carry_net]
     environment:
       POSTGRES_DB: ${TS_DB_NAME}
@@ -50,7 +54,7 @@ services:
     container_name: carry_grafana
     restart: unless-stopped
     networks: [carry_net]
-    depends_on: [carry_timescale, carry_prometheus]
+    depends_on: [carry_prometheus]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD}
       TS_DB_HOST: ${TS_DB_HOST}
@@ -71,5 +75,4 @@ services:
     container_name: carry_monitor
     restart: unless-stopped
     networks: [carry_net]
-    depends_on: [carry_timescale]
     env_file: .env
