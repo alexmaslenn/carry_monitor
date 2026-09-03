@@ -17,7 +17,7 @@ This process is READ-ONLY. It never places an order. The Binance key it uses
 should have withdrawals and trading disabled - reading is all it needs.
 
 Env (see .env.example):
-  CARRY_SETUP          book name, default 'hlbn'
+  CARRY_SETUP          book name, default 'carry'
   CARRY_INSTRUMENTS    OPTIONAL seed list. Instruments are discovered; this only
                        forces extra ones to be collected even when flat.
   CARRY_PROMETHEUS_URL Where to read the robot's declared instruments from
@@ -46,7 +46,7 @@ import requests
 if dotenv.find_dotenv():
     dotenv.load_dotenv()
 
-SETUP = os.getenv("CARRY_SETUP", "hlbn")
+SETUP = os.getenv("CARRY_SETUP", "carry")
 
 # A SEED, not the source of truth. Instruments are discovered at runtime (see
 # discover_instruments) so that trading a new pair does not require editing this.

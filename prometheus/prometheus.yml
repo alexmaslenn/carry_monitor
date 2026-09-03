@@ -22,7 +22,7 @@ scrape_configs:
         labels:
           # Which book. Same value as the `setup` column in carry_leg_time, so
           # the robot dashboard and the risk dashboard filter on one identifier.
-          setup: 'hlbn'
+          setup: 'carry'
           # Which machine runs it. Kept separate from setup because a setup can
           # move between boxes, and a box can end up running more than one.
-          host: 'hlbn_carry_tokyo'
+          host: 'carry_tokyo'

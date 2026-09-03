@@ -19,7 +19,7 @@
 -- One row per leg, per instrument, per scrape.
 CREATE TABLE IF NOT EXISTS carry_leg_time (
   time        TIMESTAMPTZ NOT NULL,
-  setup       TEXT NOT NULL,   -- which book, e.g. 'hlbn' (HL perp / Binance spot)
+  setup       TEXT NOT NULL,   -- which book, e.g. 'carry' (HL perp / Binance spot)
   instrument  TEXT NOT NULL,   -- 'DOGE' - the asset, venue-independent
   exchange    TEXT NOT NULL,   -- 'hl' | 'binance'
   leg         TEXT NOT NULL,   -- 'perp' | 'spot'
