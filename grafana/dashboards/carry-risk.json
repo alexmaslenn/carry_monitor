@@ -1,239 +1,378 @@
 {
-  "uid": "carry-risk",
-  "title": "Carry Risk",
-  "tags": ["carry", "risk"],
-  "timezone": "utc",
   "editable": true,
-  "schemaVersion": 39,
-  "refresh": "1m",
-  "time": { "from": "now-24h", "to": "now" },
-  "templating": {
-    "list": [
-      {
-        "name": "setup",
-        "label": "Book",
-        "type": "query",
-        "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-        "query": "SELECT DISTINCT setup FROM carry_delta_time ORDER BY setup",
-        "refresh": 1,
-        "includeAll": false,
-        "multi": false
-      },
-      {
-        "name": "instrument",
-        "label": "Instrument",
-        "type": "query",
-        "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-        "query": "SELECT DISTINCT instrument FROM carry_delta_time WHERE setup = ${setup:sqlstring} ORDER BY instrument",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "current": { "text": "All", "value": "$__all" }
-      }
-    ]
-  },
   "panels": [
     {
-      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
+      "panels": [],
       "title": "Book",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
-      "collapsed": false,
-      "panels": []
+      "type": "row"
     },
     {
-      "type": "timeseries",
-      "id": 2,
-      "title": "Net delta by instrument (USD)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Perp + spot. This is the number that says whether the book is hedged; neither leg alone does. Sustained non-zero means directional exposure that is not being paid for.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 1 },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": true },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "spanNulls": true
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 10 },
-              { "color": "red", "value": 25 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 25
+              }
             ]
-          }
+          },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'delta_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'delta_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Net delta by instrument (USD)",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "id": 3,
-      "title": "Carry income, annualised (USD)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "abs(perp notional) x annualised funding on the short leg. The spot leg pays nothing, which is the point of this structure - so this is gross carry before fees and borrow.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 1 },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true }
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "id": 3,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'carry_ann_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'carry_ann_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Carry income, annualised (USD)",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "id": 4,
-      "title": "Venue collateral",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Cross-venue carries do NOT net margin: Hyperliquid collateral cannot support the Binance leg or the reverse. A sharp move can margin-call one venue while the offsetting profit is stranded on the other, so each venue's headroom is watched separately.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 4,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", exchange || ' free' AS metric, (data->>'free')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", exchange || ' free' AS metric, (data->>'free')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND $__timeFilter(time) ORDER BY time",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Venue collateral",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "id": 5,
-      "title": "Binance uniMMR",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Portfolio Margin health. Healthy above ~1.2; liquidation begins around 1.05. Only meaningful for the Binance leg - Hyperliquid margin is tracked as free collateral instead.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
       "fieldConfig": {
         "defaults": {
-          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": true
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 1.1 },
-              { "color": "green", "value": 1.2 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1.1
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
             ]
           }
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 5,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'uniMMR' AS metric, (data->>'uni_mmr')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND exchange = 'binance' AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", 'uniMMR' AS metric, (data->>'uni_mmr')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND exchange = 'binance' AND $__timeFilter(time) ORDER BY time",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Binance uniMMR",
+      "type": "timeseries"
     },
     {
-      "type": "row",
-      "id": 100,
-      "title": "$instrument",
-      "description": "This row is REPEATED per instrument. Adding an instrument to CARRY_INSTRUMENTS makes it appear here with no dashboard edit - which is the whole reason the schema carries instrument as a column rather than a key inside a JSON blob.",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
       "collapsed": false,
+      "description": "This row is REPEATED per instrument. Adding an instrument to CARRY_INSTRUMENTS makes it appear here with no dashboard edit - which is the whole reason the schema carries instrument as a column rather than a key inside a JSON blob.",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 100,
+      "panels": [],
       "repeat": "instrument",
       "repeatDirection": "h",
-      "panels": []
+      "title": "$instrument",
+      "type": "row"
     },
     {
-      "type": "timeseries",
-      "id": 101,
-      "title": "$instrument legs (USD)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Perp and spot notional side by side, with net delta. A healthy carry shows the two legs mirrored and delta flat near zero.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "id": 101,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'perp' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'spot', (data->>'spot_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'delta', (data->>'delta_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'perp' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'spot', (data->>'spot_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'delta', (data->>'delta_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "$instrument legs (USD)",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "id": 102,
-      "title": "$instrument delta vs target",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Actual net delta against the configured target. Persistent divergence means the strategy is not reaching or holding its target - the failure mode that looks like nothing happening.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "id": 102,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'perp notional' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'target', (data->>'target_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'perp notional' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'target', (data->>'target_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "$instrument delta vs target",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "id": 103,
-      "title": "$instrument funding (annualised %) and basis (bps)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
       "description": "Funding is what the carry earns. Basis is HL mark vs Binance spot - a widening basis means the two legs are marked against drifting references, so a flat delta is less flat than it looks.",
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
       "fieldConfig": {
         "defaults": {
-          "custom": { "drawStyle": "line", "lineWidth": 2, "spanNulls": true }
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": true
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "basis bps" },
+            "matcher": {
+              "id": "byName",
+              "options": "basis bps"
+            },
             "properties": [
-              { "id": "custom.axisPlacement", "value": "right" },
-              { "id": "unit", "value": "none" }
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
             ]
           }
         ]
       },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "id": 103,
       "targets": [
         {
-          "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "$instrument funding (annualised %) and basis (bps)",
+      "type": "timeseries"
     }
-  ]
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "carry",
+    "risk"
+  ],
+  "templating": {
+    "list": [
+      {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "carry-timescale"
+        },
+        "includeAll": false,
+        "label": "Book",
+        "multi": false,
+        "name": "setup",
+        "query": "SELECT DISTINCT setup FROM carry_delta_time ORDER BY setup",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "carry-timescale"
+        },
+        "includeAll": true,
+        "label": "Instrument",
+        "multi": true,
+        "name": "instrument",
+        "query": "SELECT DISTINCT instrument FROM carry_delta_time WHERE setup = ${setup:sqlstring} ORDER BY instrument",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "title": "Carry Risk",
+  "uid": "carry-risk"
 }

@@ -283,9 +283,29 @@ for sharing externally" off**. Leaving it on rewrites the datasource uids as
 `${DS_...}` placeholders that provisioning cannot resolve. Save the output into
 `grafana/dashboards/` and commit it.
 
+**Exporting back into the repo.** `scripts/export-dashboards.py` writes every
+dashboard in the Carry folder back into `grafana/dashboards/`:
+
+```bash
+cd ~/carry_monitor
+./scripts/export-dashboards.py          # reads GF_ADMIN_PASSWORD from .env
+git diff                                # review before committing
+```
+
+Standard library only, so it needs nothing installed on the box. It keeps
+existing filenames by matching on `uid` rather than renaming, and strips `id` and
+`version` — `id` is local to one Grafana database and collides on a rebuilt box,
+and a stale `version` can stop the provisioner applying the file at all.
+
+Read the diff rather than committing it blind: an export also captures incidental
+UI state, most commonly whatever time range you happened to be looking at.
+
 A dashboard built in the UI and never exported lives only in Postgres. That now
 survives a restart, since Grafana keeps its state there — but it is not in git,
 so it does not exist on a rebuilt box and `docker compose down -v` destroys it.
+Worse, it is destroyed by an ordinary `git pull` too: the provisioner reapplies a
+file whenever the file changes, overwriting whatever the UI had saved. Export
+before you pull.
 
 `allowUiUpdates` is true, so edits to a provisioned dashboard are saved rather
 than reverted. The file wins again only when the file itself changes, so treat
