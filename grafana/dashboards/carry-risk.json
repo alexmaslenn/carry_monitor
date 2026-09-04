@@ -246,7 +246,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "carry-timescale"
       },
-      "description": "Actual net delta against the configured target. Persistent divergence means the strategy is not reaching or holding its target - the failure mode that looks like nothing happening.",
+      "description": "The perp leg's notional against the target configured for it (CARRY_TARGETS; negative = short perp, long spot). The two lines should sit on top of each other.\n\nThis asks whether the strategy holds the size it was told to hold, which is NOT the same question as whether it is hedged. A leg that fills to target while its opposite leg fails leaves this panel looking perfect - that is exactly what an inverted target did, with the perp at target and no hedge behind it. Net exposure is on the legs panel above; read the two together.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -273,7 +273,7 @@
           "refId": "A"
         }
       ],
-      "title": "$instrument delta vs target",
+      "title": "$instrument perp notional vs target",
       "type": "timeseries"
     },
     {
