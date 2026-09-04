@@ -326,6 +326,79 @@
       ],
       "title": "$instrument funding (annualised %) and basis (bps)",
       "type": "timeseries"
+    },
+    {
+      "type": "row",
+      "id": 200,
+      "title": "Position truth: engine vs this monitor",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 201,
+      "title": "Engine vs venue disagreement (USD)",
+      "description": "The venue position this monitor read, minus the position the trading engine reports holding, per leg, in USD.\n\nThis is the genuinely independent check. The two numbers travel completely different paths: the engine over its own websocket with the trading key, this process over REST with a read-only key. Nothing shared, so agreement means something.\n\nIt is here because the engine's own local-vs-remote comparison cannot do this. The connectors set Force=true, which makes the engine overwrite its fill-derived tally with the venue's number every sync - so that panel compares one source against itself and a gap can never persist.\n\nFlat zero is the healthy state. A step means the engine's view of a venue has gone stale or wrong, and the strategy sizes from that view, so it would be trading against a position that does not exist. Gaps in the line are honest: they mean the engine's view could not be read, not that the two agreed.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", instrument || ' ' || exchange || ' ' || leg AS metric, (data->>'engine_diff_usd')::float8 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) AND data->>'engine_diff_usd' IS NOT NULL ORDER BY time"
+        }
+      ]
     }
   ],
   "refresh": "1m",

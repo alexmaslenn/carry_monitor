@@ -341,6 +341,7 @@ the absence of health rather than for errors.
 | Market data has stopped | `rate(connector_messages{type="quotes"})` flat per venue for 5 min | critical |
 | Account connector is down | `account_connectors_up < 1` per account for 3 min | critical |
 | Orders are being rejected | `increase(order_delay_count{type=~"reject.*"}[10m]) > 2` | critical |
+| Engine disagrees with the venue | monitor's own venue read vs engine-reported differs by >$5 for 10 min | critical |
 | Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
 ### Telegram notifications
@@ -404,6 +405,15 @@ Three notes on the choices, because they are not obvious:
   is created only when a fill is handled, so between a restart and the first fill
   the join returns nothing. Alerting on that would fire after every restart and
   teach everyone to ignore the rule that catches missed fills.
+- **The engine-vs-venue rule is the real integrity check.** The monitor reads
+  each venue itself, with its own read-only key, and compares against what the
+  engine reports holding — two genuinely separate paths, so agreement means
+  something. The engine's own `local` vs `remote` comparison cannot do this:
+  the connectors set `Force=true`, so the engine overwrites its fill-derived
+  tally with the venue's number every sync and ends up compared against
+  itself. Rows where the engine's view was unreadable are stored as `null` and
+  excluded from both panel and rule, rather than counted as zero — an absence
+  must never render as agreement.
 - **Rejections are counted on `order_delay`, not `acc_orders`.** `acc_orders`
   holds state gauges only (active, pending, incomplete). The rejection counter
   is a child of the `order_delay` histogram, so `order_delay_count{type="reject"}`

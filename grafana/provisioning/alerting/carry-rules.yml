@@ -432,6 +432,62 @@ groups:
                 - evaluator: { type: gt, params: [2] }
 
       # ---------------------------------------------------------------------
+      # Does the engine's view of a venue match an independent reading of it?
+      #
+      # The real integrity check, and the one acc_position local-vs-remote only
+      # appeared to be. Two genuinely separate paths: the engine over its own
+      # websocket with the trading key, this monitor over REST with a read-only
+      # key. Nothing shared, so a disagreement is real information.
+      #
+      # NULL rows - the engine's view could not be read - are excluded rather
+      # than counted as zero. Counting them as agreement is the failure this
+      # whole stack keeps running into: an absence of data presented as a
+      # healthy result.
+      - uid: carry-engine-vs-venue
+        title: Engine disagrees with an independent read of the venue
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Engine position differs from the monitor's own venue read
+          description: >-
+            The trading engine believes it holds something different from what
+            the venue tells this process directly. The strategy sizes from the
+            engine's view, so while this persists it is trading against a
+            position that does not exist. Ten minutes rules out the normal skew
+            around a fill. Compare the engine's number on the robot dashboard
+            against the leg quantities here, and stop the book before it acts
+            again if they still differ.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: carry-timescale
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COALESCE(MAX(ABS((data->>'engine_diff_usd')::float8)), 0)
+                       AS worst_usd
+                FROM carry_leg_time
+                WHERE time > NOW() - INTERVAL '10 minutes'
+                  AND data->>'engine_diff_usd' IS NOT NULL
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+
+      # ---------------------------------------------------------------------
       # Engine's own tally vs what the venue reports.
       #
       # noDataState is OK on purpose. acc_position{type="local"} is created only

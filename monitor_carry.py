@@ -354,6 +354,87 @@ def declared_instruments() -> set[str]:
     return assets
 
 
+# The engine names markets differently from the tables here. Explicit rather
+# than lowercasing, so an unexpected market shows up as unmapped instead of
+# silently becoming a new exchange nobody is watching.
+MARKET_TO_EXCHANGE = {
+    "HL": "hl",
+    "BINANCES": "binance",
+}
+
+
+def engine_positions() -> dict[tuple[str, str], float] | None:
+    """What the ROBOT believes it holds, per (exchange, instrument).
+
+    This is the second opinion. Everything else in this file reads the venues
+    directly; this reads what the trading engine thinks, so the two can be
+    compared. They travel completely different paths - the engine over its own
+    websocket with the trading key, this process over REST with a read-only key -
+    which is what makes the comparison worth anything.
+
+    It is the check that acc_position{local} vs {remote} cannot perform. Those
+    two look independent but are not: the connectors set Force=true, so the
+    engine overwrites its own tally with the venue's number on every sync. One
+    source, compared against itself.
+
+    Returns None - not an empty dict - when the engine's view cannot be read.
+    Empty would mean "the robot holds nothing", which is the same shape of lie
+    that made a dropped position feed look like a flat book.
+    """
+    if not PROM_URL:
+        return None
+    try:
+        r = requests.get(
+            f"{PROM_URL}/api/v1/query",
+            params={"query": 'acc_position{type="remote"}'},
+            timeout=10,
+        )
+        r.raise_for_status()
+    except Exception as error:
+        source_failed("engine_positions", error)
+        return None
+
+    out: dict[tuple[str, str], float] = {}
+    for series in r.json().get("data", {}).get("result", []):
+        symbol = series.get("metric", {}).get("symbol", "")
+        market, _, asset = symbol.partition("|")
+        if not asset or asset in QUOTE_ASSETS:
+            # Collateral, not a position. Same exclusion held_instruments makes.
+            continue
+        exchange = MARKET_TO_EXCHANGE.get(market)
+        if exchange is None:
+            continue
+        try:
+            out[(exchange, asset)] = float(series["value"][1])
+        except (KeyError, IndexError, ValueError, TypeError):
+            continue
+    return out
+
+
+def engine_check(
+    engine: dict[tuple[str, str], float] | None,
+    exchange: str,
+    instrument: str,
+    venue_qty: float,
+    price: float,
+) -> dict[str, Any]:
+    """Fields comparing the engine's view of a leg against this process's.
+
+    Absent values stay null rather than becoming 0. A zero difference reads as
+    "verified agreement", and claiming agreement when one side is simply missing
+    is worse than reporting nothing.
+    """
+    if engine is None or (exchange, instrument) not in engine:
+        return {"engine_qty": None, "engine_diff": None, "engine_diff_usd": None}
+    engine_qty = engine[(exchange, instrument)]
+    diff = venue_qty - engine_qty
+    return {
+        "engine_qty": engine_qty,
+        "engine_diff": diff,
+        "engine_diff_usd": diff * price,
+    }
+
+
 def held_instruments(
     hl_positions: dict[str, float],
     bn_holdings: dict[str, float],
@@ -523,6 +604,12 @@ def main() -> int:
     # anywhere in the chain.
     instruments = discover_instruments(hl_positions, bn_holdings, hl_ctx)
 
+    # Read AFTER the venue reads, so if they disagree it is not because minutes
+    # passed between them.
+    engine = engine_positions()
+    if engine is None:
+        log("Engine view unavailable - leg rows will carry null engine_diff.")
+
     leg_rows: list[tuple] = []
     delta_rows: list[tuple] = []
 
@@ -542,6 +629,7 @@ def main() -> int:
                     "usd": perp_usd,
                     "mark": hl_mark,
                     "funding_rate_ann": hl_funding,
+                    **engine_check(engine, "hl", instrument, perp_qty, hl_mark),
                 }),
             )
         )
@@ -559,6 +647,7 @@ def main() -> int:
                     "usd": spot_usd,
                     "mark": spot_px,
                     "funding_rate_ann": 0.0,  # spot pays no funding
+                    **engine_check(engine, "binance", instrument, spot_qty, spot_px),
                 }),
             )
         )
