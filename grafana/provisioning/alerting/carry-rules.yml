@@ -326,6 +326,57 @@ groups:
                 - evaluator: { type: lt, params: [0.01] }
 
       # ---------------------------------------------------------------------
+      # Can the engine still act on this account?
+      #
+      # Distinct from the quotes rule above, and the pair matters. Market data
+      # and the account link are different connections: quotes can keep arriving
+      # while orders cannot be placed at all. That combination is the dangerous
+      # one, because every dashboard keeps updating and the strategy keeps
+      # deciding - it simply cannot execute any of it.
+      #
+      # account_connectors_up is a COUNT, not a flag: Account.cs increments it on
+      # connect and decrements on disconnect, so it reads 1 for each of these
+      # accounts because each has one connector. Zero means that whole leg is
+      # unreachable.
+      - uid: carry-account-link-down
+        title: Account connector is down
+        condition: C
+        for: 3m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: No connector online for account {{ $labels.account }}
+          description: >-
+            The engine cannot place or cancel orders on this account. If the
+            other leg is still live the book is unhedgeable rather than merely
+            idle - a move now cannot be corrected on this side. Reconnects are
+            normal and brief, so this only fires after three minutes; anything
+            longer is an outage, an expired credential, or an IP restriction that
+            no longer matches this box.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: min(account_connectors_up) by (account)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # ---------------------------------------------------------------------
       # Engine's own tally vs what the venue reports.
       #
       # noDataState is OK on purpose. acc_position{type="local"} is created only

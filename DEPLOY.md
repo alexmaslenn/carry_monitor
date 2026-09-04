@@ -339,6 +339,7 @@ the absence of health rather than for errors.
 | Carry strategy has halted | `carry_halted == 1` for 2 min | critical |
 | Clock drift against the venue | `abs(binance_timeshift) > 100 ms` for 10 min | warning |
 | Market data has stopped | `rate(connector_messages{type="quotes"})` flat per venue for 5 min | critical |
+| Account connector is down | `account_connectors_up < 1` per account for 3 min | critical |
 | Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
 ### Telegram notifications
@@ -402,6 +403,10 @@ Three notes on the choices, because they are not obvious:
   is created only when a fill is handled, so between a restart and the first fill
   the join returns nothing. Alerting on that would fire after every restart and
   teach everyone to ignore the rule that catches missed fills.
+- **Quotes and the account link are separate rules on purpose.** They are
+  different connections: quotes can keep arriving while orders cannot be
+  placed. That pairing is the dangerous one — the dashboards keep updating
+  and the strategy keeps deciding, it just cannot execute anything.
 - **The quotes rule reads `connector_messages`, not `md_*_quotes`.** The
   `md_HL_quotes` and `md_BINANCES_quotes` counters read 0 on a running robot —
   nothing increments them — so a rule on those would fire permanently. The
