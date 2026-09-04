@@ -106,11 +106,31 @@ BINANCE_SPOT = "https://api.binance.com"
 
 CARRY_DISABLED = bool(os.getenv("CARRY_DISABLED", ""))
 
-CONNECTION = (
-    f"postgres://{os.getenv('TS_DB_USER')}:{os.getenv('TS_DB_PASSWORD')}"
-    f"@{os.getenv('TS_DB_HOST')}:{os.getenv('TS_DB_PORT', '5432')}"
-    f"/{os.getenv('TS_DB_NAME')}"
-)
+
+def _db_port() -> int:
+    raw = os.getenv("TS_DB_PORT", "5432")
+    try:
+        return int(raw)
+    except ValueError:
+        raise SystemExit(f"TS_DB_PORT is not a number: {raw!r}") from None
+
+
+# Keyword parameters, NOT a postgres:// URI built by interpolation.
+#
+# A URI has to be percent-encoded, and a password is exactly where an unescaped
+# @ : / ? # shows up. Interpolating one straight into the string re-splits the
+# authority section, and the failure surfaces somewhere unrelated - a password
+# containing @ was reported as
+#   invalid integer value "X=" for connection option "port"
+# which sends you to look at TS_DB_PORT, where nothing is wrong. Keyword
+# parameters are passed through to libpq as-is and need no escaping at all.
+CONNECTION = {
+    "host": os.getenv("TS_DB_HOST", ""),
+    "port": _db_port(),
+    "dbname": os.getenv("TS_DB_NAME", ""),
+    "user": os.getenv("TS_DB_USER", ""),
+    "password": os.getenv("TS_DB_PASSWORD", ""),
+}
 
 # Hyperliquid settles funding HOURLY, Binance every 8 hours. Annualising with the
 # wrong multiplier misjudges a carry by 8x, so the two are kept apart explicitly.
@@ -378,7 +398,7 @@ def registry_active() -> set[str]:
     drops an instrument from collection at exactly the moment something is wrong.
     """
     try:
-        with psycopg2.connect(CONNECTION) as conn:
+        with psycopg2.connect(**CONNECTION) as conn:
             cur = conn.cursor()
             cur.execute(
                 "SELECT instrument FROM carry_instrument WHERE setup = %s AND active;",
@@ -395,7 +415,7 @@ def registry_upsert(seen: set[str], active_now: set[str]) -> None:
     if not seen:
         return
     try:
-        with psycopg2.connect(CONNECTION) as conn:
+        with psycopg2.connect(**CONNECTION) as conn:
             cur = conn.cursor()
             for instrument in sorted(seen):
                 is_active = instrument in active_now
@@ -472,7 +492,7 @@ def write_rows(table: str, columns: str, rows: list[tuple]) -> None:
         return
     placeholders = ",".join(["%s"] * len(rows[0]))
     try:
-        with psycopg2.connect(CONNECTION) as conn:
+        with psycopg2.connect(**CONNECTION) as conn:
             cur = conn.cursor()
             cur.executemany(
                 f"INSERT INTO {table} ({columns}) VALUES ({placeholders});", rows
