@@ -132,20 +132,59 @@ a second book later, add a `targets:` entry with its own labels and a matching
 `extra_hosts` line — no dashboard edit, since the variables read from
 `label_values`.
 
-**None of this works until the robot's metrics endpoint is reachable.** The Cell
-config uses `"Host": "localhost"`, which only accepts local connections. On the
-trading box set:
+**None of this works until the robot's metrics endpoint is reachable.** Out of
+the box the Cell config uses `"Host": "localhost"`, which only accepts local
+connections. On the trading box, bind it to the same name Prometheus scrapes:
 
-```json
-"Metrics": { "Host": "+", "Port": 9702 }
+```bash
+# /etc/hosts on the TRADING box
+10.0.10.4 carry_tokyo          # its own private address
 ```
 
-`+` binds all interfaces. On Linux that needs no extra privileges; on Windows it
-needs a `netsh http add urlacl` reservation. Then firewall 9702 to this box only
-— the endpoint exposes positions and order flow.
+```json
+"Metrics": { "Host": "carry_tokyo", "Port": 9702 }
+```
+
+`Metrics.Host` is not just a bind address. `HttpListener` registers a URL prefix
+and matches incoming requests on their **Host header**, so binding to the name
+means the endpoint answers `carry_tokyo:9702` and returns 404 to anything that
+addresses it any other way:
+
+```
+curl http://10.0.10.4:9702/metrics      -> 404
+curl http://carry_tokyo:9702/metrics    -> 200
+```
+
+Prometheus sends `Host: carry_tokyo:9702` because that is the target name, so it
+matches. Treat the 404 as a happy side effect, not a security control - firewall
+9702 to the monitoring box regardless, since the response carries positions and
+order flow.
+
+`"+"` also works and binds every interface, answering on any Host header. On
+Linux it needs no privileges; on Windows it needs a `netsh http add urlacl`
+reservation.
 
 Do not use `"0.0.0.0"`. `HttpListener` rejects it, and the exception is unhandled
 — it kills the whole trading process on startup.
+
+### Cross-region
+
+The name is the only thing the scrape config knows, so a monitoring box in a
+different region from the robot changes exactly one value:
+
+```
+ROBOT_SERVER_IP=<the robot's PUBLIC ip>
+```
+
+AWS 1:1 NATs the public address to the private one, so a listener bound to the
+private IP already accepts it - no change on the robot. Open 9702 to the
+monitoring box's address alone.
+
+Be aware that `/metrics` is unauthenticated plain HTTP, so this puts positions
+and order flow on the public internet with the security group as the only
+control. For anything past a plumbing test, tunnel it - `autossh -L` between the
+boxes, with `extra_hosts: carry_tokyo` pointed at the tunnel endpoint. The name
+stays the same, so nothing else in the stack changes.
 
 ## 7. Start
 
