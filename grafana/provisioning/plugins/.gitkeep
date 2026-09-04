@@ -1,0 +1,2 @@
+# Grafana looks for this directory on every start and logs an error when it is
+# absent. Empty on purpose - no plugins are provisioned.

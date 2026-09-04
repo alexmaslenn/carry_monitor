@@ -1,0 +1,323 @@
+# Alert rules, provisioned from disk like the dashboards.
+#
+# Chosen on one principle: every failure this book has produced was SILENT. None
+# of them raised an error - a wrong target sign, a dropped position feed, a
+# 217 ms clock drift, an unreachable scrape target. Each looked exactly like
+# nothing happening. So these rules watch for the ABSENCE of health, not for
+# errors.
+#
+# Deliberately NOT included:
+#
+#   carry_seconds_since_action - it reads 0 when the strategy has never acted,
+#   and a healthy book that has reached its target correctly does nothing for
+#   hours. Alerting on it would fire on the normal steady state, and a rule that
+#   cries wolf is worse than no rule. It stays a diagnostic on the dashboard.
+#
+# Notifications: these route to the default contact point, which has no delivery
+# configured, so they will show as Firing in the UI and go nowhere else. Add a
+# contact point (email/Telegram/Slack) before relying on them.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: carry-integrity
+    folder: Carry
+    interval: 1m
+    rules:
+
+      # ---------------------------------------------------------------------
+      # Is anything watching at all?
+      #
+      # First rule for a reason: if the monitor is dead, every other rule here
+      # goes quiet too, and quiet is what all of them use to mean healthy.
+      - uid: carry-monitor-dead
+        title: Carry monitor is not running
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: No carry_heartbeat row for over 5 minutes
+          description: >-
+            The monitor writes a heartbeat every minute whether or not anything
+            changed. A stale one means collection has stopped, and a book with no
+            monitoring looks identical to a book with nothing happening. Check
+            `docker logs carry_monitor`.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: carry-timescale
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT EXTRACT(EPOCH FROM (NOW() - MAX(time))) AS age_seconds
+                FROM carry_heartbeat
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [300] }
+
+      # ---------------------------------------------------------------------
+      # Is it collecting on complete data?
+      - uid: carry-sources-degraded
+        title: Carry monitor is degraded
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: A data source has been failing for 10 minutes
+          description: >-
+            sources_failed is non-empty, so at least one venue, Prometheus or the
+            registry is unreachable. The instrument list is held by the registry
+            so collection continues, but it is running on partial data. The
+            heartbeat row names which source.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: carry-timescale
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COUNT(*) AS failing FROM carry_heartbeat
+                WHERE time > NOW() - INTERVAL '10 minutes'
+                  AND sources_failed <> ''
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [8] }
+
+      # ---------------------------------------------------------------------
+      # Is Prometheus still reaching the robot?
+      #
+      # Without this, losing the scrape silently disarms every Prometheus rule
+      # below - they go to NoData, which is not Alerting, and the book runs
+      # unwatched while the dashboards look merely empty.
+      - uid: carry-robot-unreachable
+        title: Robot metrics endpoint is unreachable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape the trading box
+          description: >-
+            Target carry_tokyo:9702 is down. The robot may be fine - this is the
+            monitoring path failing - but every rule that reads robot metrics is
+            blind until it is fixed. Check the security group, ROBOT_SERVER_IP,
+            and that Cell is running. Note the endpoint answers only requests
+            addressed to the name carry_tokyo; by IP it returns 404.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: min(up{job="carry_robot"})
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # ---------------------------------------------------------------------
+      # Is the book actually hedged?
+      #
+      # THE one that matters. An inverted target sign left a naked $20 perp leg
+      # with the spot leg rejecting every order, for six minutes, and nothing
+      # anywhere reported it. Delta was ~20 the whole time.
+      - uid: carry-delta-breach
+        title: Carry hedge is broken
+        condition: C
+        for: 10m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Net delta has exceeded the threshold for 10 minutes
+          description: >-
+            abs(carry_delta_usd) is above DeltaDiscrepancyThresholdUSD and has
+            stayed there, so the strategy has had several action rounds and has
+            not closed it - it cannot correct this on its own. Usual causes: one
+            leg rejecting orders (insufficient balance, below venue minimum), or
+            a target the strategy cannot express. Check the legs panel to see
+            which side is missing.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: max(abs(carry_delta_usd)) by (asset)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [12] }
+
+      # ---------------------------------------------------------------------
+      # Has the strategy given up?
+      - uid: carry-halted
+        title: Carry strategy has halted
+        condition: C
+        for: 2m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: carry_halted is set - the strategy stopped acting on this asset
+          description: >-
+            The ineffective-send fuse tripped: repeated rounds changed nothing,
+            so the strategy stopped rather than loop. Whatever delta exists is
+            now frozen and nobody is correcting it. This needs a human.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: max(carry_halted) by (asset)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # ---------------------------------------------------------------------
+      # Leading indicator for order rejections.
+      - uid: carry-clock-drift
+        title: Clock drift against the venue
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: binance_timeshift beyond 100 ms
+          description: >-
+            recvWindow is spent on one-way latency PLUS this offset, so drift
+            here precedes -1021 "Timestamp outside recvWindow" rejections - which
+            present as a strategy that silently never fills, not as a clock
+            problem. A 217 ms drift from an unsynced clock once broke every order
+            on this book. Check `chronyc tracking` on the trading box.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: max(abs(binance_timeshift))
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [100] }
+
+      # ---------------------------------------------------------------------
+      # Engine's own tally vs what the venue reports.
+      #
+      # noDataState is OK on purpose. acc_position{type="local"} is created only
+      # when a fill is handled (Account.cs), so before the first fill after a
+      # restart the join produces nothing. Treating that emptiness as an alert
+      # would fire on every restart and train everyone to ignore this rule - and
+      # this is the rule that catches missed fills, which is what let a strategy
+      # re-send the same order 25 times against a position reading 0.
+      - uid: carry-position-drift
+        title: Engine and venue disagree on position
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: acc_position local and remote have diverged
+          description: >-
+            The engine's fill-derived tally and the venue's own report are
+            independent paths, so a persistent gap is the only available evidence
+            that fills have been missed. Sizing decisions are made from the local
+            number, so a stale one means the strategy trades on a position that
+            does not exist. Stop the book before it compounds.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: >-
+                max(abs(acc_position{type="remote"}
+                  - on(instance, account, symbol)
+                    acc_position{type="local"}))
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [0.5] }

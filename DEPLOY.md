@@ -324,18 +324,40 @@ This is why Grafana is configured with `GF_DATABASE_TYPE=postgres` rather than
 its default SQLite: state in a container volume cannot be moved to another host,
 and this is the same reason aegis_monitor does it.
 
-## What to alert on
+## Alerts
 
-Every failure this book has produced was **silent**, so absence of errors is not
-health. The signals worth wiring, roughly in order of value:
+Provisioned from `grafana/provisioning/alerting/carry-rules.yml`, in the **Carry**
+folder. Every failure this book has produced was **silent**, so these watch for
+the absence of health rather than for errors.
 
-| signal | query | means |
+| rule | fires when | severity |
 |---|---|---|
-| monitor dead | `max(carry_heartbeat.time)` older than 5 min | no monitoring at all |
-| degraded scrape | `sources_failed <> ''` | collecting on stale or partial data |
-| strategy stuck | `carry_seconds_since_action` growing | process alive but doing nothing |
-| position drift | `acc_position{type="remote"} - acc_position{type="local"}` | engine and venue disagree — fills missed |
-| clock drift | `binance_timeshift` beyond ±100 ms | leading indicator for `-1021` order rejections |
+| Carry monitor is not running | no `carry_heartbeat` row for 5 min | critical |
+| Carry monitor is degraded | `sources_failed` non-empty for 10 min | warning |
+| Robot metrics endpoint unreachable | `up{job="carry_robot"} == 0` for 5 min | critical |
+| Carry hedge is broken | `abs(carry_delta_usd) > 12` for 10 min | critical |
+| Carry strategy has halted | `carry_halted == 1` for 2 min | critical |
+| Clock drift against the venue | `abs(binance_timeshift) > 100 ms` for 10 min | warning |
+| Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
-The last two would have caught the incidents that actually cost money, and both
-were already being measured before anyone looked at them.
+**Notifications are not configured.** These route to Grafana's default contact
+point, which has no delivery set up, so they show as Firing in the UI and go
+nowhere. Add a contact point before relying on them.
+
+Three notes on the choices, because they are not obvious:
+
+- **"Robot unreachable" is the keystone.** Losing the scrape sends every
+  Prometheus-based rule to NoData, which is not Alerting — the book would run
+  unwatched while the dashboards merely looked empty. This rule is what makes the
+  others trustworthy.
+- **Position drift is `noDataState: OK` on purpose.** `acc_position{type="local"}`
+  is created only when a fill is handled, so between a restart and the first fill
+  the join returns nothing. Alerting on that would fire after every restart and
+  teach everyone to ignore the rule that catches missed fills.
+- **`carry_seconds_since_action` is deliberately not a rule.** It reads 0 when the
+  strategy has never acted, and a healthy book at target correctly does nothing
+  for hours, so it would alarm on the normal steady state.
+
+The delta threshold of 12 matches `DeltaDiscrepancyThresholdUSD` in the Cell
+config. If you change one, change the other — otherwise the alert fires at a
+level the strategy is not trying to correct, or stays quiet at one it cannot.
