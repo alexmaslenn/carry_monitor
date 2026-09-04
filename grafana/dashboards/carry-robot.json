@@ -229,6 +229,119 @@
       ],
       "title": "Order delay",
       "type": "timeseries"
+    },
+    {
+      "type": "row",
+      "id": 19,
+      "title": "Market data quality",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "histogram",
+      "id": 20,
+      "title": "Quotes drift histogram — $venue",
+      "description": "Distribution of quote arrival drift over the window, as the OKX colo dashboard shows it. Shape is the point: a tight cluster is a healthy feed, a long right tail means quotes are arriving late in bursts and the strategy is pricing off stale data some of the time.\n\nBuckets hold drift RELATIVE to the running minimum for this venue, so read it as spread rather than absolute latency. The median panel adds the minimum back.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "carry-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "lineWidth": 1,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorMode": "code",
+          "format": "heatmap",
+          "range": true,
+          "legendFormat": "__auto",
+          "expr": "sum by (le) (increase(md_${venue}_quotes_drift_bucket{setup=\"$setup\", host=~\"$host\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 21,
+      "title": "Quotes drift median — $venue",
+      "description": "Median quote drift, with the venue's minimum added back so this is absolute rather than relative to the floor.\n\nThe floor differs enormously by venue and that is expected, not a fault: Hyperliquid sits around 151 ms from Tokyo while Binance is effectively 0. What matters is the line moving - a rising median means quotes are getting later, which shows up as the strategy hedging against a market that has already moved.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "carry-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "$venue median",
+          "expr": "histogram_quantile(0.5, sum(rate(md_${venue}_quotes_drift_bucket{setup=\"$setup\", host=~\"$host\"}[5m])) by (le)) + avg(md_${venue}_quotes_drift_min{setup=\"$setup\", host=~\"$host\"})"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -276,6 +389,23 @@
         },
         "refresh": 1,
         "type": "query"
+      },
+      {
+        "name": "venue",
+        "label": "Venue",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "carry-prometheus"
+        },
+        "definition": "label_values(connector_messages{type=\"quotes\"}, market)",
+        "query": {
+          "query": "label_values(connector_messages{type=\"quotes\"}, market)",
+          "refId": "A"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
       },
       {
         "current": {
