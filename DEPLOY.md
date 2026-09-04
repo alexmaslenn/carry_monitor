@@ -28,8 +28,8 @@ when someone opens a dashboard, which is exactly what CPU credits are for.
 | Port | Source | Why |
 |---|---|---|
 | 22 | your IP only | ssh |
-| 443 | your IP / VPN only | Grafana through Traefik. **Never 0.0.0.0/0** — it shows positions and P&L |
-| 80 | your IP / VPN only | redirect to 443 only |
+| 80 | **your IP only** | Grafana through Traefik. See the warning below |
+| 443 | your IP / VPN only | Grafana over TLS, once the overlay is in use |
 | 9091 | nothing inbound | Prometheus has no auth; reach it over an ssh tunnel |
 | 5433 | nothing inbound | Postgres is bound to 127.0.0.1 anyway |
 
@@ -58,15 +58,26 @@ printf 'server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4\n' \
 sudo systemctl restart chrony && chronyc tracking
 ```
 
-## 3. DNS
+> **The default stack serves Grafana over plain HTTP.** The admin login and
+> everything the dashboards show — positions, P&L, venue balances — cross the
+> network unencrypted. The port-80 rule above is the *only* thing protecting
+> them, so scope it to a single address and treat widening it as a decision, not
+> a convenience. Add TLS as soon as a hostname exists (step 3).
 
-Traefik needs a hostname and a Cloudflare token before it can issue a
-certificate:
+## 3. DNS and TLS — optional, and skippable at first
+
+The stack runs with no DNS record and no certificate: Grafana is reachable by raw
+IP over HTTP. That is why the base router uses a catch-all `PathPrefix(/)` rule
+instead of `Host(...)` — a Host rule would not match a request addressed to an IP.
+
+When you are ready for TLS:
 
 1. Point an A record at the box — e.g. `carry.aegis.im` → its public IP. A
    private-only box works too; the DNS challenge never needs inbound reach.
 2. Create a Cloudflare API token with **Zone:DNS:Edit** on that zone only. Not
    the Global API Key — that one can do anything to every zone on the account.
+3. Set `GRAFANA_HOSTNAME`, `ACME_EMAIL` and `CF_API_TOKEN` in `.env`, then apply
+   the overlay (see step 7).
 
 ## 4. Get the code onto the box
 
@@ -94,10 +105,14 @@ Fill in:
 
 - `TS_DB_NAME` / `TS_DB_USER` / `TS_DB_PASSWORD` — invented here, not looked up.
   This database is created on first start.
-- `GRAFANA_HOSTNAME` — the name from step 3
-- `ACME_EMAIL`, `CF_API_TOKEN` — for the certificate
-- `GF_ADMIN_PASSWORD`
-- `ROBOT_SERVER_IP` — private IP of the trading box (see step 6)
+- `GRAFANA_HOSTNAME` — the hostname from step 3, or **this box's own IP** while
+  running without TLS. It only feeds `GF_SERVER_ROOT_URL` in HTTP mode; get it
+  wrong and Grafana bounces you around on login rather than failing outright.
+- `ACME_EMAIL`, `CF_API_TOKEN` — leave blank until you apply the TLS overlay
+- `GF_ADMIN_PASSWORD` — it travels in the clear over HTTP, so make it unique to
+  this box rather than reusing one
+- `ROBOT_SERVER_IP` — the trading box (see step 6; **public IP if it is in
+  another region**, since its private address is unreachable from here)
 - `HL_ADDRESS` — the Hyperliquid **main account address**. Public; no key needed.
 - `BINANCE_API_KEY` / `_SECRET` — **read-only**. This process never trades, so
   disable withdrawals *and* trading on the key. Do not reuse the trading key.
@@ -192,6 +207,18 @@ stays the same, so nothing else in the stack changes.
 docker compose up -d --build
 ```
 
+With TLS, once step 3 is done:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+```
+
+The overlay swaps the catch-all router for a `Host(...)` rule, adds the ACME
+resolver and the 80→443 redirect, and moves `GF_SERVER_ROOT_URL` to https. It
+writes out Traefik's `command` and Grafana's `labels` in full, because Compose
+**replaces** a command list rather than merging it — a partial override would
+silently drop the base flags.
+
 First start creates the databases from `sql/`. Note how those are mounted: as
 **individual files**, not as `./sql:/docker-entrypoint-initdb.d`. The timescaledb
 image keeps its own `000_install_timescaledb.sh` in that directory, and mounting
@@ -224,10 +251,15 @@ docker exec carry_timescale psql -U <user> -d <db> -c \
 # Prometheus found the robot
 curl -s localhost:9091/api/v1/targets | grep -o '"health":"[a-z]*"'
 
-# certificate issued
-docker logs carry_traefik 2>&1 | grep -i acme
+# Traefik picked up the Grafana router
+docker exec carry_traefik wget -qO- http://localhost:8082/ping     # -> OK
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/login    # -> 200
 
 # Grafana
+open http://<this box's IP>
+
+# with the TLS overlay instead:
+docker logs carry_traefik 2>&1 | grep -i acme
 open https://<GRAFANA_HOSTNAME>
 ```
 

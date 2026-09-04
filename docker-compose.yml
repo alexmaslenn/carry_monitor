@@ -1,5 +1,14 @@
 # Self-contained monitoring stack for the carry book.
 #
+# This file serves Grafana over PLAIN HTTP on port 80, reachable by raw IP, so it
+# runs with no DNS record and no certificate. That means the admin login and
+# everything the dashboards show crosses the network in the clear - keep port 80
+# restricted to your own address in the security group, and treat that rule as
+# the only thing protecting it.
+#
+# To add TLS later, once a hostname and Cloudflare token exist:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
 # Deliberately SEPARATE from the aegis_monitor stack - its own Grafana, its own
 # Prometheus, its own database - so nothing here touches the production
 # monitoring instance. The shape follows aegis_monitor's, because that one works:
@@ -79,7 +88,10 @@ services:
         condition: service_healthy
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: https://${GRAFANA_HOSTNAME}
+      # http here, https in docker-compose.tls.yml. Grafana builds redirects and
+      # asset links from this, so a mismatch with how you actually reach it shows
+      # up as a login loop rather than as an obvious error.
+      GF_SERVER_ROOT_URL: http://${GRAFANA_HOSTNAME}
       # State in Postgres, not the container filesystem - the same choice
       # aegis_monitor makes. Dashboards, users, annotations and alert rules then
       # survive a rebuild and can be moved between hosts with pg_dump, which is
@@ -105,18 +117,13 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=carry_monitor_carry_net"
       - "traefik.http.services.carrygrafana.loadbalancer.server.port=3000"
-      - "traefik.http.routers.carrygrafana.rule=Host(`${GRAFANA_HOSTNAME}`)"
-      - "traefik.http.routers.carrygrafana.entrypoints=websecure"
-      - "traefik.http.routers.carrygrafana.tls=true"
-      - "traefik.http.routers.carrygrafana.tls.certresolver=carryresolver"
       - "traefik.http.routers.carrygrafana.service=carrygrafana"
-      # Plain HTTP exists only to redirect. This dashboard shows positions and
-      # P&L and should never be served unencrypted.
-      - "traefik.http.routers.carrygrafana-http.rule=Host(`${GRAFANA_HOSTNAME}`)"
-      - "traefik.http.routers.carrygrafana-http.entrypoints=web"
-      - "traefik.http.routers.carrygrafana-http.middlewares=carry-to-https"
-      - "traefik.http.middlewares.carry-to-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.carry-to-https.redirectscheme.permanent=true"
+      - "traefik.http.routers.carrygrafana.entrypoints=web"
+      # Catch-all rather than Host(...), deliberately: with no DNS record yet you
+      # reach this by raw IP, and a Host rule would not match that request. The
+      # TLS overlay replaces this with a Host rule, which is what a certificate
+      # needs anyway.
+      - "traefik.http.routers.carrygrafana.rule=PathPrefix(`/`)"
 
   carry_traefik:
     image: traefik:latest
@@ -130,19 +137,10 @@ services:
       - "--ping.entrypoint=ping"
       - "--entryPoints.ping.address=:8082"
       - "--entryPoints.web.address=:80"
-      - "--entryPoints.websecure.address=:443"
       - "--providers.docker=true"
       - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       # Nothing is routed unless it opts in with a label.
       - "--providers.docker.exposedByDefault=false"
-      - "--certificatesResolvers.carryresolver.acme.email=${ACME_EMAIL}"
-      - "--certificatesResolvers.carryresolver.acme.storage=/letsencrypt/acme.json"
-      # DNS challenge, as aegis_monitor uses. It does not require port 80 to be
-      # reachable from the internet, so the security group can stay closed to
-      # everything except your own address.
-      - "--certificatesResolvers.carryresolver.acme.dnsChallenge.provider=cloudflare"
-    environment:
-      - CLOUDFLARE_DNS_API_TOKEN=${CF_API_TOKEN}
     volumes:
       # Read-only: Traefik only needs to watch for container labels. The docker
       # socket is root on the host, so never mount it writable.
@@ -150,7 +148,6 @@ services:
       - ./letsencrypt:/letsencrypt
     ports:
       - "80:80"
-      - "443:443"
     healthcheck:
       test: ["CMD", "wget", "http://localhost:8082/ping", "--spider", "-q"]
       interval: 10s
