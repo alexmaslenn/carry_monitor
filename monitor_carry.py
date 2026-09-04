@@ -48,13 +48,36 @@ if dotenv.find_dotenv():
 
 SETUP = os.getenv("CARRY_SETUP", "carry")
 
+
+def json_env(name: str, default: str):
+    """Parse a JSON-valued environment variable, reporting what was wrong.
+
+    A bare json.loads traceback names the variable but not the value, which is
+    the wrong half. These reach the process through docker and then a cron
+    environment snapshot, so the realistic failure is the value being mangled in
+    transit rather than mistyped in .env - and only printing what actually
+    arrived tells those two apart.
+    """
+    raw = os.getenv(name, default)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SystemExit(
+            f"{name} is not valid JSON: {error}\n"
+            f"  value seen by this process: {raw!r}\n"
+            f"  expected something like: {default!r}\n"
+            f"  If .env looks right, it was mangled on the way in - check the "
+            f"env.sh snapshot written by docker-entrypoint.sh."
+        ) from error
+
+
 # A SEED, not the source of truth. Instruments are discovered at runtime (see
 # discover_instruments) so that trading a new pair does not require editing this.
 # Anything listed here is always collected even when flat, which is useful for a
 # pair you are about to trade and want history for.
-SEED_INSTRUMENTS: list[str] = json.loads(os.getenv("CARRY_INSTRUMENTS", "[]"))
+SEED_INSTRUMENTS: list[str] = json_env("CARRY_INSTRUMENTS", "[]")
 
-TARGETS: dict[str, float] = json.loads(os.getenv("CARRY_TARGETS", "{}"))
+TARGETS: dict[str, float] = json_env("CARRY_TARGETS", "{}")
 
 # Where to learn what the robot INTENDS to trade. Either works; Prometheus is
 # preferred because it survives a robot restart, whereas scraping the robot

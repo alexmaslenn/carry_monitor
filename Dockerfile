@@ -12,7 +12,9 @@ COPY monitor_carry.py .
 RUN echo "* * * * * . /app/env.sh; python3 /app/monitor_carry.py >> /var/log/carry.log 2>&1" > /app/crontab_file \
     && crontab /app/crontab_file
 
-# cron does not inherit the container environment, so snapshot it at start.
-CMD printenv | sed 's/^\([^=]*\)=\(.*\)$/export \1="\2"/' > /app/env.sh \
-    && touch /var/log/carry.log \
-    && cron && tail -f /var/log/carry.log
+COPY docker-entrypoint.sh .
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Snapshots the environment for cron, then starts it. See the script for why that
+# snapshot needs real shell quoting and not a sed wrapper.
+CMD ["/app/docker-entrypoint.sh"]
