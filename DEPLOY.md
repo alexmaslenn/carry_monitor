@@ -263,8 +263,33 @@ docker logs carry_traefik 2>&1 | grep -i acme
 open https://<GRAFANA_HOSTNAME>
 ```
 
-Both dashboards are provisioned from disk into a "Carry" folder. Editing them in
-the UI is overwritten on restart — change the JSON in git instead.
+Both dashboards are provisioned from disk into a **Carry** folder.
+
+## Adding a dashboard
+
+`grafana/provisioning/dashboards/dashboards.yml` watches `grafana/dashboards/`
+and rescans every 30 seconds, so a new file appears without a restart.
+
+**From a file.** Drop the JSON in `grafana/dashboards/`. It needs a unique `uid`,
+a `title`, and to be the **raw dashboard object** — not the
+`{"__inputs": [...], "dashboard": {...}}` wrapper that Grafana's "export for
+sharing externally" produces, which the provisioner cannot read. Reference
+datasources by their fixed uids, `carry-timescale` and `carry-prometheus`; they
+are pinned in `datasources.yml` precisely so dashboard JSON needs no editing
+after import.
+
+**From the UI.** Build it, then Share → Export → Export as JSON with **"export
+for sharing externally" off**. Leaving it on rewrites the datasource uids as
+`${DS_...}` placeholders that provisioning cannot resolve. Save the output into
+`grafana/dashboards/` and commit it.
+
+A dashboard built in the UI and never exported lives only in Postgres. That now
+survives a restart, since Grafana keeps its state there — but it is not in git,
+so it does not exist on a rebuilt box and `docker compose down -v` destroys it.
+
+`allowUiUpdates` is true, so edits to a provisioned dashboard are saved rather
+than reverted. The file wins again only when the file itself changes, so treat
+the JSON as the source of truth and export UI changes back into it.
 
 ## Backup
 
