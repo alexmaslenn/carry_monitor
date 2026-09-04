@@ -377,6 +377,61 @@ groups:
                 - evaluator: { type: lt, params: [1] }
 
       # ---------------------------------------------------------------------
+      # Are orders being refused?
+      #
+      # The gap this closes: an inverted target left the spot leg rejecting every
+      # order it sent - insufficient balance, six times in six minutes - while the
+      # perp leg sat filled and unhedged. Nothing counted it. The only trace was
+      # a log line nobody was reading.
+      #
+      # The counter is NOT in acc_orders, which only has state gauges (active,
+      # pending, incomplete...). Rejections are registered as children of the
+      # order_delay histogram, so order_delay_count with type=reject is the count
+      # (Account.cs:959). type=reject is the venue refusing; type=reject_local is
+      # the engine's own guard declining to send.
+      #
+      # increase() over 10 minutes rather than a bare rate, so one transient
+      # refusal does not page: three in ten minutes is a strategy that cannot
+      # place what it wants, not bad luck.
+      - uid: carry-orders-rejected
+        title: Orders are being rejected
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Repeated order rejections on account {{ $labels.account }}
+          description: >-
+            The strategy is sending orders the venue or the engine will not
+            accept, so it is trying to correct something and failing. Check the
+            Cell log for the reason - insufficient balance, below the venue
+            minimum, or -1021 timestamp errors are the usual three. Watch the
+            legs panel at the same time: rejections on one leg while the other is
+            filled means the book is unhedged for as long as this continues.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: sum(increase(order_delay_count{type=~"reject|reject_local"}[10m])) by (account, type)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+
+      # ---------------------------------------------------------------------
       # Engine's own tally vs what the venue reports.
       #
       # noDataState is OK on purpose. acc_position{type="local"} is created only

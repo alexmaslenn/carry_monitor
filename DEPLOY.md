@@ -340,6 +340,7 @@ the absence of health rather than for errors.
 | Clock drift against the venue | `abs(binance_timeshift) > 100 ms` for 10 min | warning |
 | Market data has stopped | `rate(connector_messages{type="quotes"})` flat per venue for 5 min | critical |
 | Account connector is down | `account_connectors_up < 1` per account for 3 min | critical |
+| Orders are being rejected | `increase(order_delay_count{type=~"reject.*"}[10m]) > 2` | critical |
 | Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
 ### Telegram notifications
@@ -403,6 +404,11 @@ Three notes on the choices, because they are not obvious:
   is created only when a fill is handled, so between a restart and the first fill
   the join returns nothing. Alerting on that would fire after every restart and
   teach everyone to ignore the rule that catches missed fills.
+- **Rejections are counted on `order_delay`, not `acc_orders`.** `acc_orders`
+  holds state gauges only (active, pending, incomplete). The rejection counter
+  is a child of the `order_delay` histogram, so `order_delay_count{type="reject"}`
+  is the count — `type="reject"` is the venue refusing, `type="reject_local"`
+  the engine's own guard declining to send.
 - **Quotes and the account link are separate rules on purpose.** They are
   different connections: quotes can keep arriving while orders cannot be
   placed. That pairing is the dangerous one — the dashboards keep updating
