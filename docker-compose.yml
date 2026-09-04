@@ -102,6 +102,12 @@ services:
       GF_DATABASE_USER: ${TS_DB_USER}
       GF_DATABASE_PASSWORD: ${TS_DB_PASSWORD}
       GF_DATABASE_SSL_MODE: disable
+      # Consumed by the provisioned Telegram contact point. Grafana expands
+      # ${VAR} in provisioning files from its own environment, so the token has
+      # to reach the container rather than only living in .env. The chat id is
+      # NOT passed: Grafana coerces interpolated values to numbers and a numeric
+      # chat id then fails validation, so it is a literal in the contact point.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       # Consumed by the provisioned datasource.
       TS_DB_HOST: carry_timescale
       TS_DB_PORT: "5432"

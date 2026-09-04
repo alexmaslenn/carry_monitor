@@ -340,9 +340,39 @@ the absence of health rather than for errors.
 | Clock drift against the venue | `abs(binance_timeshift) > 100 ms` for 10 min | warning |
 | Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
-**Notifications are not configured.** These route to Grafana's default contact
-point, which has no delivery set up, so they show as Firing in the UI and go
-nowhere. Add a contact point before relying on them.
+### Telegram notifications
+
+Provisioned in `carry-contactpoints.yml`. Two steps:
+
+1. **Create a bot.** Message [@BotFather](https://t.me/BotFather), send
+   `/newbot`, follow the prompts. It replies with a token like
+   `8123456789:AAH...`. Put it in `.env` as `TELEGRAM_BOT_TOKEN`.
+2. **Get the chat id.** Add the bot to the group (or DM it), send any message,
+   then:
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":[-0-9]*'
+   ```
+   Groups are negative (`-1001234567890`), DMs positive. Put it directly into
+   `chatid:` in `carry-contactpoints.yml` — **not** into `.env`.
+
+That split looks wrong and is deliberate. Grafana coerces interpolated
+provisioning values to their natural type, so a numeric chat id arrives as a
+number and validation fails with *"cannot unmarshal number into Go struct field
+Config.chatid of type string"* — which stops Grafana from starting entirely.
+Quoting the variable does not help; the coercion happens after expansion. The
+token, being non-numeric, interpolates fine. A chat id is an identifier and
+useless without the token, so it is safe to keep in a private repo.
+
+The token goes in `settings`, not `secureSettings`, for the same
+found-the-hard-way reason: validation looks for it in `settings` and otherwise
+fails with *"could not find Bot Token in settings"*. Grafana encrypts it on
+ingest either way — the API reads it back as `[REDACTED]`.
+
+Restart Grafana after changing either, then **Alerting → Contact points →
+carry-telegram → Test** to confirm delivery.
+
+Running without notifications: delete `carry-contactpoints.yml`. Leaving it with
+an empty token stops Grafana from starting.
 
 Three notes on the choices, because they are not obvious:
 

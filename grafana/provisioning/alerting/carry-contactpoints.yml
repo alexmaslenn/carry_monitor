@@ -1,0 +1,70 @@
+# Telegram delivery for the rules in carry-rules.yml.
+#
+# Without this the rules evaluate correctly and notify nobody: they land on
+# Grafana's built-in default contact point, which has no delivery configured, so
+# they fire into a UI nobody is watching. An alert that only shows up where you
+# would already have noticed the problem is not an alert.
+#
+# Needs TELEGRAM_BOT_TOKEN in .env, and the chat id edited in below. Delete this
+# file to run without notifications - Grafana will not start if it provisions a
+# contact point with an empty bot token.
+#
+# TWO GRAFANA QUIRKS ARE LOAD-BEARING HERE. Both were found by watching it refuse
+# to start, and both look like mistakes if you tidy them:
+#
+# 1. The bot token goes in `settings`, NOT `secureSettings`. Validation looks for
+#    it in settings and fails with "could not find Bot Token in settings"
+#    otherwise. Grafana encrypts it on ingest regardless - the API reads it back
+#    as [REDACTED] - so nothing is lost by putting it here.
+#
+# 2. The chat id is a LITERAL, not ${TELEGRAM_CHAT_ID}. Grafana re-types
+#    interpolated provisioning values, so an id like -1001234567890 arrives as a
+#    number and validation dies with "cannot unmarshal number into Go struct
+#    field Config.chatid of type string". Quoting the variable does not help; the
+#    coercion happens after expansion. A chat id is an identifier rather than a
+#    credential - useless without the token - so keeping it in the file is a fair
+#    trade for a stack that starts.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: carry-telegram
+    receivers:
+      - uid: carry-telegram
+        type: telegram
+        settings:
+          # See quirk 1 above before moving this to secureSettings.
+          bottoken: ${TELEGRAM_BOT_TOKEN}
+          # See quirk 2 above before turning this into a variable.
+          # Replace with your own: negative for a group, positive for a DM.
+          chatid: "REPLACE_WITH_CHAT_ID"
+          parse_mode: HTML
+          # Grafana's default template leads with its own branding. This leads
+          # with severity and what broke, because it is read on a phone and the
+          # first line is the whole message most of the time.
+          message: |-
+            <b>{{ if eq .Status "firing" }}🔴{{ else }}✅ RESOLVED{{ end }} {{ .CommonLabels.severity | toUpper }}</b>
+            {{ range .Alerts }}
+            <b>{{ .Labels.alertname }}</b>
+            {{ .Annotations.summary }}
+            {{ if .Labels.asset }}asset: {{ .Labels.asset }}
+            {{ end }}{{ .Annotations.description }}
+            {{ end }}
+        # Resolved messages on. A rule that says a book is broken and never says
+        # it recovered leaves you unable to tell a fixed problem from a forgotten
+        # one.
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: carry-telegram
+    # Grouped by rule and asset, not into one digest: these are independent
+    # failures, and collapsing them hides the second behind the first.
+    group_by: [alertname, asset]
+    # Short - the cheapest of these to act on is also the most urgent.
+    group_wait: 30s
+    group_interval: 5m
+    # Re-send while still firing: long enough not to be noise, short enough that
+    # something left unattended resurfaces the same day.
+    repeat_interval: 6h
