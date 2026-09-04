@@ -19,7 +19,7 @@
         "type": "prometheus",
         "uid": "carry-prometheus"
       },
-      "description": "acc_position{type=remote} minus {type=local}. 'local' is the engine's own fill-derived tally; 'remote' is what the venue reports. They are independent paths, so a persistent gap is the ONLY evidence available that fills have been missed.\n\nThis is not hypothetical: a dropped position feed let a strategy re-issue the same order 25 times because its own position read 0.00 while 119 orders filled behind it. Non-zero here for more than a scrape or two warrants stopping the book.",
+      "description": "acc_position{type=remote} minus {type=local}. 'local' is the engine's own fill-derived tally; 'remote' is what the venue reports. They are independent paths, so a persistent gap is the ONLY evidence available that fills have been missed.\n\nEMPTY DOES NOT MEAN AGREEMENT. The 'local' series is created inside the fill handler (Account.cs), so it does not exist at all between a restart and the first fill - and a book sitting at target may not fill for hours. A blank panel means there is nothing to compare yet. Check 'Position by symbol' beside this one: if it shows only type=remote, that is why.\n\nOnce both exist, a persistent gap is serious: the strategy sizes from the local number, so a stale one means it trades against a position that does not exist. That is how a dropped feed let the same order go out 25 times against a position reading 0.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -57,7 +57,7 @@
           "refId": "A"
         }
       ],
-      "title": "Position drift: engine vs venue",
+      "title": "Position drift: engine vs venue (needs a fill first)",
       "type": "timeseries"
     },
     {
@@ -247,7 +247,7 @@
       "type": "histogram",
       "id": 20,
       "title": "Quotes drift histogram — $venue",
-      "description": "Distribution of quote arrival drift over the window, as the OKX colo dashboard shows it. Shape is the point: a tight cluster is a healthy feed, a long right tail means quotes are arriving late in bursts and the strategy is pricing off stale data some of the time.\n\nBuckets hold drift RELATIVE to the running minimum for this venue, so read it as spread rather than absolute latency. The median panel adds the minimum back.",
+      "description": "Distribution of quote arrival drift over the window, as the OKX colo dashboard shows it. Shape is the point: a tight cluster is a healthy feed, a long right tail means quotes arrive late in bursts and the strategy prices off stale data some of the time.\n\nBINANCE IS STRUCTURALLY ZERO HERE - it is not a latency result. Drift is LocalTimestamp minus RemoteTimestamp, and the Binance spot connector sets both to the same value because the @bookTicker stream carries no exchange event time to subtract. Hyperliquid's BBO does carry one, so its drift is real. Compare HL against itself over time; do not compare the two venues.\n\nBuckets hold drift RELATIVE to the running minimum for the venue, so read this as spread. The median panel adds the minimum back.",
       "datasource": {
         "type": "prometheus",
         "uid": "carry-prometheus"
@@ -299,7 +299,7 @@
       "type": "timeseries",
       "id": 21,
       "title": "Quotes drift median — $venue",
-      "description": "Median quote drift, with the venue's minimum added back so this is absolute rather than relative to the floor.\n\nThe floor differs enormously by venue and that is expected, not a fault: Hyperliquid sits around 151 ms from Tokyo while Binance is effectively 0. What matters is the line moving - a rising median means quotes are getting later, which shows up as the strategy hedging against a market that has already moved.",
+      "description": "Median quote drift, with the venue's minimum added back so this is absolute rather than relative to the floor.\n\nHyperliquid sits around 151 ms from Tokyo; Binance reads 0 because its spot quotes carry no exchange timestamp for the engine to compare against, not because they arrive instantly. Only HL's line carries information here.\n\nWhat matters is the line MOVING. A rising median means quotes are arriving later, which shows up in trading as hedging against a market that has already moved.",
       "datasource": {
         "type": "prometheus",
         "uid": "carry-prometheus"
