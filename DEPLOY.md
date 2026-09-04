@@ -338,6 +338,7 @@ the absence of health rather than for errors.
 | Carry hedge is broken | `abs(carry_delta_usd) > 12` for 10 min | critical |
 | Carry strategy has halted | `carry_halted == 1` for 2 min | critical |
 | Clock drift against the venue | `abs(binance_timeshift) > 100 ms` for 10 min | warning |
+| Market data has stopped | `rate(connector_messages{type="quotes"})` flat per venue for 5 min | critical |
 | Engine and venue disagree | `acc_position` remote − local `> 0.5` for 5 min | critical |
 
 ### Telegram notifications
@@ -401,6 +402,11 @@ Three notes on the choices, because they are not obvious:
   is created only when a fill is handled, so between a restart and the first fill
   the join returns nothing. Alerting on that would fire after every restart and
   teach everyone to ignore the rule that catches missed fills.
+- **The quotes rule reads `connector_messages`, not `md_*_quotes`.** The
+  `md_HL_quotes` and `md_BINANCES_quotes` counters read 0 on a running robot —
+  nothing increments them — so a rule on those would fire permanently. The
+  venue is a label on `connector_messages` rather than part of the metric
+  name, so one rule covers any venue added later without an edit.
 - **`carry_seconds_since_action` is deliberately not a rule.** It reads 0 when the
   strategy has never acted, and a healthy book at target correctly does nothing
   for hours, so it would alarm on the normal steady state.

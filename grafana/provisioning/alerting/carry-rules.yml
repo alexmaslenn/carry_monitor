@@ -274,6 +274,58 @@ groups:
                 - evaluator: { type: gt, params: [100] }
 
       # ---------------------------------------------------------------------
+      # Has a venue stopped sending market data?
+      #
+      # The strategy prices both legs from quotes. With none arriving it holds
+      # the last price it saw, so a dead feed does not stop it - it makes it size
+      # against a stale market, and the process looks entirely healthy while
+      # doing so.
+      #
+      # NOT md_HL_quotes / md_BINANCES_quotes, despite the name. Those read 0 on
+      # a running robot - nothing increments them - so a rule on them would fire
+      # forever. connector_messages carries the count that actually moves, and it
+      # labels the venue instead of baking it into the metric name, so this one
+      # rule covers a venue added later without being edited.
+      - uid: carry-quotes-stopped
+        title: Market data has stopped from a venue
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: No quotes from {{ $labels.market }} for several minutes
+          description: >-
+            connector_messages{type="quotes"} has been flat for this venue. Crypto
+            venues do not close, so this is a dead subscription or a dropped
+            socket, not a quiet market. The strategy keeps pricing off the last
+            quote it received, so it will go on sizing and hedging against a
+            market that has moved without it. Check the connector on the trading
+            box; account_connectors_up shows whether the account link is also
+            down or only the feed.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: carry-prometheus
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: sum(rate(connector_messages{type="quotes"}[5m])) by (market)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: lt, params: [0.01] }
+
+      # ---------------------------------------------------------------------
       # Engine's own tally vs what the venue reports.
       #
       # noDataState is OK on purpose. acc_position{type="local"} is created only

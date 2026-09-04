@@ -38,7 +38,7 @@ contactPoints:
           bottoken: ${TELEGRAM_BOT_TOKEN}
           # See quirk 2 above before turning this into a variable.
           # Replace with your own: negative for a group, positive for a DM.
-          chatid: "REPLACE_WITH_CHAT_ID"
+          chatid: "-1003914460260"
           parse_mode: HTML
           # Grafana's default template leads with its own branding. This leads
           # with severity and what broke, because it is read on a phone and the
@@ -59,9 +59,12 @@ contactPoints:
 policies:
   - orgId: 1
     receiver: carry-telegram
-    # Grouped by rule and asset, not into one digest: these are independent
-    # failures, and collapsing them hides the second behind the first.
-    group_by: [alertname, asset]
+    # Grouped by rule, asset and venue, not into one digest: these are
+    # independent failures, and collapsing them hides the second behind the
+    # first. market is in here so a dead Hyperliquid feed still notifies while a
+    # dead Binance feed is already firing - one leg down is the case where you
+    # most need to know which.
+    group_by: [alertname, asset, market]
     # Short - the cheapest of these to act on is also the most urgent.
     group_wait: 30s
     group_interval: 5m
