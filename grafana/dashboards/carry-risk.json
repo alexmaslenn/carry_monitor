@@ -24,7 +24,7 @@
         "label": "Instrument",
         "type": "query",
         "datasource": { "type": "grafana-postgresql-datasource", "uid": "carry-timescale" },
-        "query": "SELECT DISTINCT instrument FROM carry_delta_time WHERE setup = '$setup' ORDER BY instrument",
+        "query": "SELECT DISTINCT instrument FROM carry_delta_time WHERE setup = ${setup:sqlstring} ORDER BY instrument",
         "refresh": 1,
         "includeAll": true,
         "multi": true,
@@ -68,7 +68,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'delta_usd')::float8 AS value FROM carry_delta_time WHERE setup = '$setup' AND instrument IN ($instrument) AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'delta_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time"
         }
       ]
     },
@@ -91,7 +91,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'carry_ann_usd')::float8 AS value FROM carry_delta_time WHERE setup = '$setup' AND instrument IN ($instrument) AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", instrument AS metric, (data->>'carry_ann_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time"
         }
       ]
     },
@@ -114,7 +114,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", exchange || ' free' AS metric, (data->>'free')::float8 AS value FROM carry_venue_time WHERE setup = '$setup' AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", exchange || ' free' AS metric, (data->>'free')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND $__timeFilter(time) ORDER BY time"
         }
       ]
     },
@@ -144,7 +144,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'uniMMR' AS metric, (data->>'uni_mmr')::float8 AS value FROM carry_venue_time WHERE setup = '$setup' AND exchange = 'binance' AND $__timeFilter(time) ORDER BY time"
+          "rawSql": "SELECT time AS \"time\", 'uniMMR' AS metric, (data->>'uni_mmr')::float8 AS value FROM carry_venue_time WHERE setup = ${setup:sqlstring} AND exchange = 'binance' AND $__timeFilter(time) ORDER BY time"
         }
       ]
     },
@@ -178,7 +178,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'perp' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) UNION ALL SELECT time, 'spot', (data->>'spot_usd')::float8 FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) UNION ALL SELECT time, 'delta', (data->>'delta_usd')::float8 FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'perp' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'spot', (data->>'spot_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'delta', (data->>'delta_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
         }
       ]
     },
@@ -201,7 +201,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'perp notional' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) UNION ALL SELECT time, 'target', (data->>'target_usd')::float8 FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'perp notional' AS metric, (data->>'perp_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'target', (data->>'target_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
         }
       ]
     },
@@ -231,7 +231,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = '$setup' AND instrument = '$instrument' AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = '$setup' AND instrument = '$instrument' AND $__timeFilter(time) ORDER BY 1"
+          "rawSql": "SELECT time AS \"time\", 'funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
         }
       ]
     }
