@@ -167,7 +167,20 @@ services:
     depends_on:
       carry_timescale:
         condition: service_healthy
+      # Not a hard dependency - a failed Prometheus query only marks the scrape
+      # degraded - but starting after it avoids a guaranteed-degraded first run.
+      carry_prometheus:
+        condition: service_started
+    # Passes the whole file, which is what supplies CARRY_SETUP, CARRY_TARGETS,
+    # HL_ADDRESS, BINANCE_API_* and the TS_DB_* credentials. The entries below
+    # only override the few whose correct value depends on being inside compose.
     env_file: .env
+    # The robot metrics endpoint is the FALLBACK discovery source, used when the
+    # Prometheus query fails. It can only be reached if this container resolves
+    # the same name prometheus does, so it needs its own copy of the mapping -
+    # without this, the fallback is configured but permanently unreachable.
+    extra_hosts:
+      carry_tokyo: "${ROBOT_SERVER_IP}"
     environment:
       TS_DB_HOST: carry_timescale
       TS_DB_PORT: "5432"
