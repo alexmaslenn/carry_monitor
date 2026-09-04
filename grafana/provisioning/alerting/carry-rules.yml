@@ -441,21 +441,27 @@ groups:
       # this is the rule that catches missed fills, which is what let a strategy
       # re-send the same order 25 times against a position reading 0.
       - uid: carry-position-drift
-        title: Engine and venue disagree on position
+        title: Fill not reflected within a sync interval
         condition: C
         for: 5m
         noDataState: OK
         execErrState: OK
         labels:
-          severity: critical
+          # Downgraded from critical. It was labelled critical on the belief that
+          # it verified fills independently, which it does not - a quiet rule
+          # here proves nothing, so paging on it would be paging on noise.
+          severity: warning
         annotations:
-          summary: acc_position local and remote have diverged
+          summary: acc_position local and remote disagree for longer than a sync
           description: >-
-            The engine's fill-derived tally and the venue's own report are
-            independent paths, so a persistent gap is the only available evidence
-            that fills have been missed. Sizing decisions are made from the local
-            number, so a stale one means the strategy trades on a position that
-            does not exist. Stop the book before it compounds.
+            NARROW BY CONSTRUCTION - read the panel description before acting.
+            local is not an independent tally: the connectors set Force=true on
+            position events, so Synchronize() assigns CalculatedVolume from the
+            venue every sync. A gap therefore cannot persist, and this rule can
+            only catch a fill that has not been reflected within one interval.
+            It does NOT prove fills are counted correctly, and a quiet rule here
+            is not assurance. Independent verification needs a second reader of
+            the venue, which is what the monitor's own position collection is.
         data:
           - refId: A
             relativeTimeRange: { from: 600, to: 0 }

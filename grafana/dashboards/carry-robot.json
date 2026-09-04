@@ -19,7 +19,7 @@
         "type": "prometheus",
         "uid": "carry-prometheus"
       },
-      "description": "acc_position{type=remote} minus {type=local}. 'local' is the engine's own fill-derived tally; 'remote' is what the venue reports. They are independent paths, so a persistent gap is the ONLY evidence available that fills have been missed.\n\nEMPTY DOES NOT MEAN AGREEMENT. The 'local' series is created inside the fill handler (Account.cs), so it does not exist at all between a restart and the first fill - and a book sitting at target may not fill for hours. A blank panel means there is nothing to compare yet. Check 'Position by symbol' beside this one: if it shows only type=remote, that is why.\n\nOnce both exist, a persistent gap is serious: the strategy sizes from the local number, so a stale one means it trades against a position that does not exist. That is how a dropped feed let the same order go out 25 times against a position reading 0.",
+      "description": "acc_position{type=remote} minus {type=local}.\n\nREAD THIS BEFORE TRUSTING IT. These are NOT two independent paths any more. The connectors set Force=true on position events, which makes AccountPosition.Update call Synchronize(), and that assigns CalculatedVolume = the venue's volume - so 'local' is overwritten with 'remote' on every position event, at least every PositionSyncIntervalMs (30s). Force=true is load-bearing: without it position events are dropped entirely, which is what let a strategy re-send the same order 25 times against a position reading 0. The independent tally was the price of fixing that.\n\nWhat this panel can still show: a fill that has not been reflected within one sync interval. What it CANNOT show: sustained disagreement, because the next sync erases it. A flat zero here is not evidence that fills are being counted correctly.\n\nIt is also empty until the first fill after a restart - the 'local' series is created inside the fill handler and does not exist before then.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -57,7 +57,7 @@
           "refId": "A"
         }
       ],
-      "title": "Position drift: engine vs venue (needs a fill first)",
+      "title": "Position drift: engine vs venue (see description — limited)",
       "type": "timeseries"
     },
     {
