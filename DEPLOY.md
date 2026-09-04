@@ -368,8 +368,25 @@ found-the-hard-way reason: validation looks for it in `settings` and otherwise
 fails with *"could not find Bot Token in settings"*. Grafana encrypts it on
 ingest either way — the API reads it back as `[REDACTED]`.
 
-Restart Grafana after changing either, then **Alerting → Contact points →
-carry-telegram → Test** to confirm delivery.
+Then recreate the container:
+
+```bash
+docker compose up -d --force-recreate carry_grafana
+```
+
+**`docker compose restart` is not enough for a `.env` change.** It reuses the
+existing container with the environment it was created with, so a newly added
+`TELEGRAM_BOT_TOKEN` never arrives and Grafana fails to start with *"could not
+find Bot Token in settings"* — which reads as a problem with the contact point
+rather than with how it was restarted. Provisioning **files** are re-read by a
+restart; **environment** is not.
+
+Check it arrived, then test delivery from **Alerting → Contact points →
+carry-telegram → Test**:
+
+```bash
+docker compose exec carry_grafana printenv TELEGRAM_BOT_TOKEN | cut -c1-12
+```
 
 Running without notifications: delete `carry-contactpoints.yml`. Leaving it with
 an empty token stops Grafana from starting.
