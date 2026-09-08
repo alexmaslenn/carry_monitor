@@ -281,7 +281,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "carry-timescale"
       },
-      "description": "Funding is what the carry earns. Basis is HL mark vs Binance spot - a widening basis means the two legs are marked against drifting references, so a flat delta is less flat than it looks.",
+      "description": "Funding each perp venue is paying, annualised, against the HL-vs-spot basis.\n\nLabelled by exchange because a market can have more than one perp leg. With a constant label the two venues came back as two series with the same name at the same timestamps and were drawn over each other.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -320,12 +320,122 @@
         {
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time AS \"time\", 'funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1",
+          "rawSql": "SELECT time AS \"time\", exchange || ' funding ann %' AS metric, (data->>'funding_rate_ann')::float8 * 100 AS value FROM carry_leg_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND leg = 'perp' AND $__timeFilter(time) UNION ALL SELECT time, 'basis bps', (data->>'basis_bps')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1",
           "refId": "A"
         }
       ],
       "title": "$instrument funding (annualised %) and basis (bps)",
       "type": "timeseries"
+    },
+    {
+      "type": "timeseries",
+      "id": 104,
+      "title": "$instrument perp side by venue (USD)",
+      "description": "Where the short actually sits. The two perp legs and the spot pool that hedges both of them.\n\nThis is the panel that shows a venue migration: on a weight change the two perp lines cross while the spot line stays flat, because the spot leg hedges the NET perp change and a migration nets to zero. If the spot line moves during one, something sized the round off the gross instead.\n\nBlank before 2026-09-08 16:00 - the split was not recorded until the monitor learned about the second perp leg, and the rows written before that genuinely do not contain it.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", 'HL perp' AS metric, (data->>'perp_hl_usd')::float8 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'Binance perp', (data->>'perp_binance_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) UNION ALL SELECT time, 'Binance spot', (data->>'spot_usd')::float8 FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 105,
+      "title": "$instrument funding spread, HL minus Binance (ann %)",
+      "description": "What moving the short between venues is worth, per year.\n\nPositive means Hyperliquid pays more, so the short belongs there; negative means Binance does. Zero means the choice is free and should be made on collateral efficiency instead - both legs on Binance PM net against each other, across venues they do not.\n\nRead it against the cost of acting: a switch is roughly 0.09% of notional round trip, so a 5%/yr edge needs about a week of persistence to repay. A spread that crosses zero repeatedly is noise and switching on it loses money. This is being recorded so that judgement can be made on a distribution rather than on a single reading.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "carry-timescale"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", 'HL - Binance' AS metric, (data->>'funding_spread_ann')::float8 * 100 AS value FROM carry_delta_time WHERE setup = ${setup:sqlstring} AND instrument IN (${instrument:sqlstring}) AND $__timeFilter(time) ORDER BY time"
+        }
+      ]
     },
     {
       "type": "row",
@@ -335,7 +445,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 35
       },
       "collapsed": false,
       "panels": []
@@ -353,7 +463,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
