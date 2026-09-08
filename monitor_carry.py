@@ -23,8 +23,6 @@ Env (see .env.example):
   CARRY_PROMETHEUS_URL Where to read the robot's declared instruments from
   CARRY_ROBOT_METRICS_URL  Fallback: scrape the robot directly
   CARRY_DISCOVERY_MIN_USD  Dust floor for held-position discovery, default 1
-  CARRY_TARGETS        JSON map instrument -> signed USD perp target, e.g.
-                       {"DOGE": -20}. Negative = short perp / long spot.
   HL_ADDRESS           Hyperliquid MAIN account address (public, read-only)
   BINANCE_API_KEY      Binance Portfolio Margin key, read-only
   BINANCE_API_SECRET
@@ -76,8 +74,6 @@ def json_env(name: str, default: str):
 # Anything listed here is always collected even when flat, which is useful for a
 # pair you are about to trade and want history for.
 SEED_INSTRUMENTS: list[str] = json_env("CARRY_INSTRUMENTS", "[]")
-
-TARGETS: dict[str, float] = json_env("CARRY_TARGETS", "{}")
 
 # Where to learn what the robot INTENDS to trade. Either works; Prometheus is
 # preferred because it survives a robot restart, whereas scraping the robot
@@ -493,6 +489,46 @@ def engine_positions() -> dict[tuple[str, str], float] | None:
     return out
 
 
+def engine_targets() -> dict[str, float] | None:
+    """What the robot is TRYING to hold, per asset, from its own metric.
+
+    This used to be CARRY_TARGETS in .env - a second copy of a number the robot
+    already publishes. Second copies drift, and this one had: the file said -20
+    while the book was -30, so every panel comparing position against target read
+    a 47% overshoot that did not exist.
+
+    Reading it here means the target cannot disagree with the robot, because there
+    is only one of them, and changing it is a robot config change and nothing else.
+
+    Returns None, not {}, when the robot's view cannot be read. Empty would make
+    every instrument look like it has a target of zero - "deliberately flat" - which
+    is a specific claim and the wrong one.
+    """
+    if not PROM_URL:
+        return None
+    try:
+        r = requests.get(
+            f"{PROM_URL}/api/v1/query",
+            params={"query": "carry_target_usd"},
+            timeout=10,
+        )
+        r.raise_for_status()
+    except Exception as error:
+        source_failed("engine_targets", error)
+        return None
+
+    out: dict[str, float] = {}
+    for series in r.json().get("data", {}).get("result", []):
+        asset = series.get("metric", {}).get("asset")
+        if not asset:
+            continue
+        try:
+            out[asset] = float(series["value"][1])
+        except (KeyError, IndexError, ValueError, TypeError):
+            continue
+    return out
+
+
 def engine_check(
     engine: dict[tuple[str, str, str], float] | None,
     exchange: str,
@@ -700,6 +736,10 @@ def main() -> int:
     if engine is None:
         log("Engine view unavailable - leg rows will carry null engine_diff.")
 
+    targets = engine_targets()
+    if targets is None:
+        log("Robot targets unavailable - delta rows will carry null target_usd.")
+
     leg_rows: list[tuple] = []
     delta_rows: list[tuple] = []
 
@@ -774,7 +814,9 @@ def main() -> int:
                 t, SETUP, instrument,
                 json.dumps({
                     "delta_usd": delta_usd,
-                    "target_usd": TARGETS.get(instrument, 0.0),
+                    # Null, not 0, when the robot cannot be read: 0 would say
+                    # "deliberately flat", which is a different claim.
+                    "target_usd": None if targets is None else targets.get(instrument),
                     # perp_usd stays the WHOLE perp side, so the existing panels
                     # keep meaning what they meant. The split is beside it.
                     "perp_usd": perp_total_usd,
