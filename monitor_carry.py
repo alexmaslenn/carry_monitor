@@ -292,6 +292,72 @@ def binance_state() -> tuple[dict[str, float], dict[str, Any]]:
     return holdings, account
 
 
+def binance_perp_positions() -> dict[str, float] | None:
+    """Signed USD-M positions from the Portfolio Margin account, by ASSET.
+
+    Returns None rather than {} when the read fails. Empty would mean "the perp
+    side is flat", which is a different statement and the one that makes a broken
+    feed look like a closed position.
+    """
+    rows = binance_signed("/papi/v1/um/positionRisk")
+    if rows is None:
+        return None
+
+    out: dict[str, float] = {}
+    for r in rows:
+        symbol = r.get("symbol") or ""
+        try:
+            amt = float(r.get("positionAmt") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not amt:
+            continue
+        asset = strip_quote(symbol)
+        if asset:
+            out[asset] = out.get(asset, 0.0) + amt
+    return out
+
+
+def binance_perp_mark(instrument: str) -> float:
+    """Mark price for the USD-M perp. Public endpoint - no key needed."""
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            params={"symbol": instrument + "USDT"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return float(r.json().get("markPrice") or 0)
+    except Exception as error:
+        source_failed(f"binance_perp_mark:{instrument}", error)
+        return 0.0
+
+
+def binance_perp_funding(instrument: str) -> float:
+    """Annualised funding on the USD-M perp, for comparison against HL's."""
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            params={"symbol": instrument + "USDT"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        # Binance settles DOGEUSDT every 8h; HL settles hourly. Annualising with
+        # the wrong period misjudges a rate by 8x, so the two are kept apart.
+        return float(r.json().get("lastFundingRate") or 0) * BINANCE_FUNDING_PERIODS_PER_YEAR
+    except Exception as error:
+        source_failed(f"binance_perp_funding:{instrument}", error)
+        return 0.0
+
+
+def strip_quote(symbol: str) -> str:
+    """DOGEUSDT -> DOGE. Perp symbols are PAIRS; every table here keys on the asset."""
+    for q in sorted(QUOTE_ASSETS, key=len, reverse=True):
+        if symbol.endswith(q) and len(symbol) > len(q):
+            return symbol[: -len(q)]
+    return symbol
+
+
 def binance_spot_mid(instrument: str) -> float:
     try:
         r = requests.get(
@@ -357,9 +423,17 @@ def declared_instruments() -> set[str]:
 # The engine names markets differently from the tables here. Explicit rather
 # than lowercasing, so an unexpected market shows up as unmapped instead of
 # silently becoming a new exchange nobody is watching.
-MARKET_TO_EXCHANGE = {
-    "HL": "hl",
-    "BINANCES": "binance",
+# Engine market -> (exchange, leg) as this schema names them. Explicit rather
+# than pattern-matched, so a market nobody has mapped shows up as unmapped instead
+# of silently becoming a leg that is never compared.
+#
+# The leg matters as much as the exchange: BINANCES|DOGE and BINANCEF|DOGEUSDT are
+# both "binance", and keying on exchange alone would have the perp overwrite the
+# spot and be compared against the wrong number.
+MARKET_TO_LEG = {
+    "HL": ("hl", "perp"),
+    "BINANCES": ("binance", "spot"),
+    "BINANCEF": ("binance", "perp"),
 }
 
 
@@ -394,26 +468,35 @@ def engine_positions() -> dict[tuple[str, str], float] | None:
         source_failed("engine_positions", error)
         return None
 
-    out: dict[tuple[str, str], float] = {}
+    out: dict[tuple[str, str, str], float] = {}
     for series in r.json().get("data", {}).get("result", []):
         symbol = series.get("metric", {}).get("symbol", "")
-        market, _, asset = symbol.partition("|")
+        market, _, rest = symbol.partition("|")
+        if not rest:
+            continue
+
+        mapped = MARKET_TO_LEG.get(market)
+        if mapped is None:
+            continue
+        exchange, leg = mapped
+
+        # Perp markets report a PAIR, spot reports the ASSET it holds.
+        asset = strip_quote(rest) if leg == "perp" else rest
         if not asset or asset in QUOTE_ASSETS:
             # Collateral, not a position. Same exclusion held_instruments makes.
             continue
-        exchange = MARKET_TO_EXCHANGE.get(market)
-        if exchange is None:
-            continue
+
         try:
-            out[(exchange, asset)] = float(series["value"][1])
+            out[(exchange, leg, asset)] = float(series["value"][1])
         except (KeyError, IndexError, ValueError, TypeError):
             continue
     return out
 
 
 def engine_check(
-    engine: dict[tuple[str, str], float] | None,
+    engine: dict[tuple[str, str, str], float] | None,
     exchange: str,
+    leg: str,
     instrument: str,
     venue_qty: float,
     price: float,
@@ -424,9 +507,9 @@ def engine_check(
     "verified agreement", and claiming agreement when one side is simply missing
     is worse than reporting nothing.
     """
-    if engine is None or (exchange, instrument) not in engine:
+    if engine is None or (exchange, leg, instrument) not in engine:
         return {"engine_qty": None, "engine_diff": None, "engine_diff_usd": None}
-    engine_qty = engine[(exchange, instrument)]
+    engine_qty = engine[(exchange, leg, instrument)]
     diff = venue_qty - engine_qty
     return {
         "engine_qty": engine_qty,
@@ -598,6 +681,13 @@ def main() -> int:
     hl_ctx = hl_marks_and_funding()
     bn_holdings, bn_account = binance_state()
 
+    # The robot can short the same asset on Binance as well as HL, against one
+    # spot pool. Without this the Binance perp leg is invisible: no row, no
+    # contribution to the delta, and a book that looks half its real size.
+    bn_perp = binance_perp_positions()
+    if bn_perp is None:
+        log("Binance perp positions unavailable - that leg will be null this scrape.")
+
     # Discovered every scrape, not read from config. Trading a new pair makes it
     # appear here on the next run, and the Grafana variables are already queries
     # over what has been written - so the dashboards pick it up with no edit
@@ -629,7 +719,28 @@ def main() -> int:
                     "usd": perp_usd,
                     "mark": hl_mark,
                     "funding_rate_ann": hl_funding,
-                    **engine_check(engine, "hl", instrument, perp_qty, hl_mark),
+                    **engine_check(engine, "hl", "perp", instrument, perp_qty, hl_mark),
+                }),
+            )
+        )
+
+        # PERP leg - Binance USD-M, short. Same row shape as the HL one; the
+        # (instrument, exchange, leg) key keeps it distinct from the spot leg on
+        # the same exchange.
+        bn_perp_qty = (bn_perp or {}).get(instrument, 0.0)
+        bn_perp_mark = binance_perp_mark(instrument) if bn_perp_qty else 0.0
+        bn_perp_usd = bn_perp_qty * bn_perp_mark
+        bn_perp_funding = binance_perp_funding(instrument) if bn_perp_qty else 0.0
+        leg_rows.append(
+            (
+                t, SETUP, instrument, "binance", "perp",
+                json.dumps({
+                    "qty": bn_perp_qty,
+                    "usd": bn_perp_usd,
+                    "mark": bn_perp_mark,
+                    "funding_rate_ann": bn_perp_funding,
+                    **engine_check(engine, "binance", "perp", instrument,
+                                   bn_perp_qty, bn_perp_mark),
                 }),
             )
         )
@@ -647,12 +758,16 @@ def main() -> int:
                     "usd": spot_usd,
                     "mark": spot_px,
                     "funding_rate_ann": 0.0,  # spot pays no funding
-                    **engine_check(engine, "binance", instrument, spot_qty, spot_px),
+                    **engine_check(engine, "binance", "spot", instrument, spot_qty, spot_px),
                 }),
             )
         )
 
-        delta_usd = perp_usd + spot_usd
+        # Delta is the WHOLE book: every perp leg plus the spot that hedges them.
+        # Leaving the Binance perp out would have reported a hedged book as 20 USD
+        # short, and a naked one as hedged.
+        perp_total_usd = perp_usd + bn_perp_usd
+        delta_usd = perp_total_usd + spot_usd
         basis_bps = ((spot_px - hl_mark) / hl_mark * 10000) if hl_mark else 0.0
         delta_rows.append(
             (
@@ -660,11 +775,19 @@ def main() -> int:
                 json.dumps({
                     "delta_usd": delta_usd,
                     "target_usd": TARGETS.get(instrument, 0.0),
-                    "perp_usd": perp_usd,
+                    # perp_usd stays the WHOLE perp side, so the existing panels
+                    # keep meaning what they meant. The split is beside it.
+                    "perp_usd": perp_total_usd,
+                    "perp_hl_usd": perp_usd,
+                    "perp_binance_usd": bn_perp_usd,
                     "spot_usd": spot_usd,
                     # Carry income accrues on the SHORT perp leg only - the spot
                     # leg pays nothing, which is the point of this structure.
-                    "carry_ann_usd": abs(perp_usd) * hl_funding,
+                    "carry_ann_usd": abs(perp_usd) * hl_funding
+                    + abs(bn_perp_usd) * bn_perp_funding,
+                    # Funding spread between the venues, which is what a
+                    # decision to move the short between them turns on.
+                    "funding_spread_ann": hl_funding - bn_perp_funding,
                     # HL mark vs Binance spot. A widening basis means the two
                     # legs are being marked against drifting references, so a
                     # "flat" delta is less flat than it looks.
