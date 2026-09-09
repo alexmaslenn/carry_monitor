@@ -313,16 +313,50 @@ the JSON as the source of truth and export UI changes back into it.
 
 ## Backup
 
-Everything that matters — carry history *and* Grafana's own dashboards, users
-and alert rules — is in one Postgres, so one dump covers both:
+Everything that matters — carry history *and* Grafana's own dashboards, users and
+alert rules — is in one Postgres, which is why Grafana runs with
+`GF_DATABASE_TYPE=postgres` rather than its default SQLite. State in a container
+volume cannot be moved to another host, and one dump should cover both halves:
+the measurements, and the dashboards that interpret them.
+
+`scripts/backup-db.sh` does it. Install it on a schedule:
 
 ```bash
-docker exec carry_timescale pg_dumpall -U <user> | gzip > carry-$(date +%F).sql.gz
+( crontab -l 2>/dev/null; echo '17 */6 * * * /home/ubuntu/carry_monitor/scripts/backup-db.sh >> /home/ubuntu/backups/backup.log 2>&1' ) | crontab -
 ```
 
-This is why Grafana is configured with `GF_DATABASE_TYPE=postgres` rather than
-its default SQLite: state in a container volume cannot be moved to another host,
-and this is the same reason aegis_monitor does it.
+Every six hours into `~/backups`, `chmod 600`, pruned after 14 days. Three files
+per run: `globals` (roles), the carry database, and `grafana`. It writes to
+`.part` and renames only on success — a truncated dump under a good name is worse
+than no dump, because it is the one you reach for.
+
+### Restoring
+
+The carry database has **hypertables**, and a plain `psql -f` fails on their
+metadata. TimescaleDB needs bracketing calls:
+
+```bash
+createdb -U <user> restored
+psql -U <user> -d restored -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
+psql -U <user> -d restored -c "SELECT timescaledb_pre_restore();"
+zcat ~/backups/<stamp>-<db>.sql.gz | psql -U <user> -d restored
+psql -U <user> -d restored -c "SELECT timescaledb_post_restore();"
+```
+
+The `grafana` dump has no hypertables and restores with plain `psql`. The
+`globals` dump carries the roles and is only needed when restoring onto a new
+instance.
+
+Verified rather than assumed: a full restore into a throwaway container returned
+zero errors, all four hypertables intact, and Grafana's 3 dashboards and 11 alert
+rules present.
+
+### What this does not cover
+
+**The dumps sit on the same disk as the database.** That is enough for a bad
+migration, a dropped table, or a mistaken `docker compose down -v`. It is not
+enough for losing the box or the volume. Copy them off — S3, or the other
+monitoring host — once the dashboards are worth more than the effort of doing so.
 
 ## Alerts
 

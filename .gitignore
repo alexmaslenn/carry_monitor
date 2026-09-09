@@ -7,3 +7,6 @@ __pycache__/
 # Traefik ACME state: acme.json holds the certificate private key.
 letsencrypt/*
 !letsencrypt/.gitkeep
+
+# Database dumps, written by scripts/backup-db.sh.
+backups/
